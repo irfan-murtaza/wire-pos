@@ -1,0 +1,827 @@
+import React, { useState, useEffect } from 'react';
+import { collection, getDocs, query, orderBy, addDoc, where, doc, updateDoc } from 'firebase/firestore';
+import { db } from './firebase';
+import { generatePrintableHTML } from './PrintableReceipt';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
+
+function SalesTable({ onAddNewSale, refreshTrigger }) {
+  const [sales, setSales] = useState([]);
+  const [filteredSales, setFilteredSales] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth());
+  const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
+  const [productFilter, setProductFilter] = useState('');
+  const [customerFilter, setCustomerFilter] = useState('');
+  const [showOnlyDebt, setShowOnlyDebt] = useState(false);
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [showPaymentHistory, setShowPaymentHistory] = useState(false);
+  const [selectedSale, setSelectedSale] = useState(null);
+  const [paymentAmount, setPaymentAmount] = useState('');
+  const [paymentMethod, setPaymentMethod] = useState('Cash');
+  const [paymentComment, setPaymentComment] = useState('');
+  const [paymentHistory, setPaymentHistory] = useState([]);
+  const [paymentErrors, setPaymentErrors] = useState({});
+  const [chequeNumber, setChequeNumber] = useState('');
+
+  const months = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'
+  ];
+
+  const years = Array.from({ length: 10 }, (_, i) => new Date().getFullYear() - i);
+
+  useEffect(() => {
+    fetchSales();
+  }, [refreshTrigger]);
+
+  useEffect(() => {
+    filterSales();
+  }, [sales, selectedMonth, selectedYear, productFilter, customerFilter, showOnlyDebt]);
+
+  const filterSales = () => {
+    const filtered = sales.filter(sale => {
+      const saleDate = new Date(sale.date);
+      const monthMatch = saleDate.getMonth() === selectedMonth;
+      const yearMatch = saleDate.getFullYear() === selectedYear;
+      const productMatch = productFilter === '' || 
+        sale.items.some(item => 
+          item.name.toLowerCase().includes(productFilter.toLowerCase())
+        );
+      const customerMatch = customerFilter === '' || 
+        sale.customerName.toLowerCase().includes(customerFilter.toLowerCase());
+      const debtMatch = !showOnlyDebt || (sale.remainingAmount > 0);
+      
+      return monthMatch && yearMatch && productMatch && customerMatch && debtMatch;
+    });
+    setFilteredSales(filtered);
+  };
+
+  const fetchSales = async () => {
+    try {
+      const salesQuery = query(collection(db, 'receipts'), orderBy('date', 'desc'));
+      const querySnapshot = await getDocs(salesQuery);
+      const salesList = querySnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      setSales(salesList);
+    } catch (error) {
+      console.error('Error fetching sales:', error);
+      alert('Error fetching sales. Please check console for details.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const formatDate = (dateString) => {
+    return new Date(dateString).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+
+  const calculateMonthlyTotal = () => {
+    return filteredSales.reduce((sum, sale) => sum + (sale.totalAmount || 0), 0);
+  };
+
+  const calculateMonthlyDebt = () => {
+    return filteredSales.reduce((sum, sale) => sum + (sale.remainingAmount || 0), 0);
+  };
+
+  const handlePrint = async (sale) => {
+    try {
+      // Get payment history for the sale
+      const paymentHistoryQuery = query(
+        collection(db, 'paymentHistory'),
+        where('saleId', '==', sale.id),
+        orderBy('date', 'desc')
+      );
+      
+      const querySnapshot = await getDocs(paymentHistoryQuery);
+      const paymentHistory = querySnapshot.docs.map(doc => ({
+        ...doc.data(),
+        date: doc.data().date || new Date().toISOString()
+      }));
+
+      // Create initial payment record
+      const initialPayment = {
+        amount: sale.paidAmount || sale.totalAmount,
+        paymentMethod: sale.paymentMethod,
+        date: sale.date,
+        comment: sale.comment || '',
+        chequeNumber: sale.chequeNumber || '',
+        isInitial: true
+      };
+
+      // Always include payment history
+      const allPayments = [initialPayment, ...paymentHistory].sort((a, b) => 
+        new Date(b.date) - new Date(a.date)
+      );
+
+      const html = generatePrintableHTML({
+        customerName: sale.customerName,
+        customerPhone: sale.customerPhone,
+        items: sale.items,
+        totalAmount: sale.totalAmount,
+        paidAmount: sale.paidAmount || 0,
+        remainingAmount: sale.remainingAmount || 0,
+        date: sale.date,
+        paymentMethod: sale.paymentMethod,
+        chequeNumber: sale.chequeNumber,
+        comment: sale.comment,
+        discount: sale.discount || 0,
+        discountAmount: sale.discountAmount || 0,
+        subtotal: sale.totalAmount + (sale.discountAmount || 0),
+        paymentHistory: allPayments
+      });
+    
+      const printWindow = window.open('', '_blank', 'width=800,height=600');
+    
+      printWindow.document.open();
+      printWindow.document.write(html);
+      printWindow.document.close();
+    
+      printWindow.onload = function () {
+        printWindow.focus();
+        printWindow.print();
+        printWindow.close();
+      };
+    } catch (error) {
+      console.error('Error generating printable receipt:', error);
+      alert('Error generating receipt. Please check console for details.');
+    }
+  };
+
+  const handlePayRemaining = (sale) => {
+    setSelectedSale(sale);
+    setPaymentAmount(sale.remainingAmount?.toString() || '0');
+    setShowPaymentModal(true);
+  };
+
+  const handleViewDetails = async (sale) => {
+    setSelectedSale(sale);
+    console.log('Selected Sale Items:', sale.items);
+    try {
+      console.log('Fetching payment history for sale:', sale.id);
+      
+      // Get payment history from paymentHistory collection
+      const paymentHistoryQuery = query(
+        collection(db, 'paymentHistory'),
+        where('saleId', '==', sale.id),
+        orderBy('date', 'desc')
+      );
+      
+      const querySnapshot = await getDocs(paymentHistoryQuery);
+      console.log('Query snapshot:', querySnapshot.docs.map(doc => doc.data()));
+      
+      // Create initial payment record from sale data
+      const initialPayment = {
+        id: 'initial',
+        amount: sale.paidAmount || sale.totalAmount,
+        paymentMethod: sale.paymentMethod,
+        date: sale.date,
+        comment: sale.comment || '',
+        chequeNumber: sale.chequeNumber || '',
+        isInitial: true
+      };
+
+      let history = [];
+      
+      if (!querySnapshot.empty) {
+        history = querySnapshot.docs.map(doc => {
+          const data = doc.data();
+          console.log('Payment data:', data);
+          return {
+            id: doc.id,
+            ...data,
+            date: data.date || new Date().toISOString(),
+            amount: data.amount || 0,
+            isInitial: false
+          };
+        });
+      }
+
+      // Combine initial payment with other payments and sort by date
+      history = [initialPayment, ...history].sort((a, b) => 
+        new Date(b.date) - new Date(a.date)
+      );
+
+      console.log('Processed payment history:', history);
+      setPaymentHistory(history);
+      setShowPaymentHistory(true);
+    } catch (error) {
+      console.error('Error fetching payment history:', error);
+      console.error('Error details:', {
+        message: error.message,
+        code: error.code,
+        stack: error.stack
+      });
+      setPaymentHistory([]);
+      setShowPaymentHistory(true);
+      alert('Error fetching payment history. Please check console for details.');
+    }
+  };
+
+  const handlePaymentSubmit = async () => {
+    const newErrors = {};
+    
+    if (!paymentAmount || parseFloat(paymentAmount) <= 0) {
+      newErrors.amount = 'Please enter a valid payment amount';
+    } else if (parseFloat(paymentAmount) > selectedSale.remainingAmount) {
+      newErrors.amount = `Payment amount cannot exceed remaining amount (Rs ${selectedSale.remainingAmount.toFixed(2)})`;
+    }
+
+    if (paymentMethod === 'Cheque' && !chequeNumber.trim()) {
+      newErrors.chequeNumber = 'Cheque number is required';
+    }
+
+    if (paymentMethod === 'Other' && !paymentComment.trim()) {
+      newErrors.comment = 'Comment is required for "Other" payment method';
+    }
+
+    setPaymentErrors(newErrors);
+    if (Object.keys(newErrors).length > 0) {
+      return;
+    }
+
+    try {
+      const paymentData = {
+        saleId: selectedSale.id,
+        amount: parseFloat(paymentAmount),
+        paymentMethod,
+        comment: paymentMethod === 'Other' ? paymentComment : '',
+        chequeNumber: paymentMethod === 'Cheque' ? chequeNumber : '',
+        date: new Date().toISOString()
+      };
+
+      await addDoc(collection(db, 'paymentHistory'), paymentData);
+      
+      // Calculate new remaining amount
+      const newRemainingAmount = (selectedSale.remainingAmount || 0) - parseFloat(paymentAmount);
+      const saleDoc = doc(db, 'receipts', selectedSale.id);
+      
+      // Calculate total paid amount (initial payment + all additional payments)
+      const paymentHistoryQuery = query(
+        collection(db, 'paymentHistory'),
+        where('saleId', '==', selectedSale.id)
+      );
+      const paymentHistorySnapshot = await getDocs(paymentHistoryQuery);
+      const additionalPayments = paymentHistorySnapshot.docs.reduce((sum, doc) => 
+        sum + (doc.data().amount || 0), 0
+      );
+      const totalPaidAmount = (selectedSale.paidAmount || 0) + additionalPayments + parseFloat(paymentAmount);
+      
+      if (newRemainingAmount <= 0) {
+        // If fully paid, update the sale document
+        await updateDoc(saleDoc, {
+          remainingAmount: 0,
+          isDebt: false,
+          paidAmount: totalPaidAmount
+        });
+      } else {
+        // Update remaining amount and total paid amount
+        await updateDoc(saleDoc, {
+          remainingAmount: newRemainingAmount,
+          paidAmount: totalPaidAmount
+        });
+      }
+
+      setShowPaymentModal(false);
+      setPaymentAmount('');
+      setPaymentMethod('Cash');
+      setPaymentComment('');
+      setChequeNumber('');
+      setPaymentErrors({});
+      fetchSales(); // Refresh the sales data
+    } catch (error) {
+      console.error('Error saving payment:', error);
+      alert(`Error saving payment: ${error.message}`);
+    }
+  };
+
+  const handleDownloadReport = () => {
+    const doc = new jsPDF();
+    
+    // Add title
+    doc.setFontSize(16);
+    doc.text(`Monthly Sales Report - ${months[selectedMonth]} ${selectedYear}`, 14, 15);
+    
+    // Add filter information
+    doc.setFontSize(10);
+    let yPos = 25;
+    if (productFilter) {
+      doc.text(`Product Filter: ${productFilter}`, 14, yPos);
+      yPos += 5;
+    }
+    if (customerFilter) {
+      doc.text(`Customer Filter: ${customerFilter}`, 14, yPos);
+      yPos += 5;
+    }
+    if (showOnlyDebt) {
+      doc.text('Showing Only Debt Sales', 14, yPos);
+      yPos += 5;
+    }
+    
+    // Add summary
+    doc.setFontSize(12);
+    doc.text('Summary', 14, yPos + 5);
+    doc.setFontSize(10);
+    doc.text(`Total Sales: Rs ${Math.round(calculateMonthlyTotal())}`, 14, yPos + 12);
+    doc.text(`Total Paid: Rs ${Math.round(filteredSales.reduce((sum, sale) => sum + (sale.paidAmount || 0), 0))}`, 14, yPos + 17);
+    doc.text(`Total Debt: Rs ${Math.round(calculateMonthlyDebt())}`, 14, yPos + 22);
+    
+    // Prepare table data
+    const tableData = filteredSales.map(sale => {
+      // Format items as a string with line breaks
+      const itemsText = sale.items.map(item => 
+        `${item.name} (${item.quantity}: ${Math.round(item.price || item.unitPrice)})`
+      ).join('\n');
+
+      // Format discount information
+      const discountText = sale.discount > 0 ? 
+        `${sale.discount}% (Rs ${Math.round(sale.discountAmount || 0)})` : '-';
+
+      // Format payment method with details
+      let paymentInfo = sale.paymentMethod;
+      if (sale.paymentMethod === 'Cheque' && sale.chequeNumber) {
+        paymentInfo = `Cheque #${sale.chequeNumber}`;
+      } else if (sale.paymentMethod === 'Other' && sale.comment) {
+        paymentInfo = sale.comment;
+      }
+
+      // Format customer name with phone number
+      const customerInfo = `${sale.customerName}\n${sale.customerPhone || '-'}`;
+
+      return [
+        formatDate(sale.date),
+        customerInfo,
+        paymentInfo,
+        Math.round(sale.totalAmount),
+        Math.round(sale.paidAmount || 0),
+        Math.round(sale.remainingAmount || 0),
+        discountText,
+        itemsText
+      ];
+    });
+
+    // Add main table
+    autoTable(doc, {
+      startY: yPos + 30,
+      head: [['Date', 'Customer', 'Payment', 'Total', 'Paid', 'Remaining', 'Discount', 'Items (Qty: Unit Price in PKR)']],
+      body: tableData,
+      theme: 'grid',
+      headStyles: { fillColor: [41, 128, 185] },
+      styles: { fontSize: 7 },
+      columnStyles: {
+        0: { cellWidth: 20 },
+        1: { cellWidth: 30 },
+        2: { cellWidth: 20 },
+        3: { cellWidth: 15 },
+        4: { cellWidth: 15 },
+        5: { cellWidth: 15 },
+        6: { cellWidth: 20 },
+        7: { cellWidth: 40, cellPadding: 2 }
+      }
+    });
+
+    // Save the PDF
+    doc.save(`sales_report_${months[selectedMonth]}_${selectedYear}.pdf`);
+  };
+
+  if (loading) {
+    return (
+      <div className="flex justify-center items-center h-64">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <h2 className="text-2xl font-semibold text-gray-800">Sales History</h2>
+        <div className="flex items-center space-x-4">
+          <button
+            onClick={handleDownloadReport}
+            className="text-green-600 hover:text-green-800 p-2 rounded-full hover:bg-green-50"
+            title="Download Monthly Report"
+          >
+            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+            </svg>
+          </button>
+          <button
+            onClick={onAddNewSale}
+            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md shadow-sm transition-all"
+          >
+            Add New Sale
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-4">
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Month</label>
+          <select
+            value={selectedMonth}
+            onChange={(e) => setSelectedMonth(parseInt(e.target.value))}
+            className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+          >
+            {months.map((month, index) => (
+              <option key={month} value={index}>{month}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Year</label>
+          <select
+            value={selectedYear}
+            onChange={(e) => setSelectedYear(parseInt(e.target.value))}
+            className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+          >
+            {years.map(year => (
+              <option key={year} value={year}>{year}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Product</label>
+          <input
+            type="text"
+            placeholder="Search by product"
+            value={productFilter}
+            onChange={(e) => setProductFilter(e.target.value)}
+            className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Customer</label>
+          <input
+            type="text"
+            placeholder="Search by customer"
+            value={customerFilter}
+            onChange={(e) => setCustomerFilter(e.target.value)}
+            className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
+          <select
+            value={showOnlyDebt ? 'debt' : 'all'}
+            onChange={(e) => setShowOnlyDebt(e.target.value === 'debt')}
+            className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+          >
+            <option value="all">All Sales</option>
+            <option value="debt">Only Debt</option>
+          </select>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-lg shadow overflow-hidden">
+        <div className="p-4 bg-gray-50 border-b">
+          <div className="flex justify-between items-center">
+            <span className="text-sm text-gray-600">
+              Showing {filteredSales.length} sales for {months[selectedMonth]} {selectedYear}
+              {productFilter && `, containing product "${productFilter}"`}
+              {customerFilter && `, for customer "${customerFilter}"`}
+            </span>
+            <div className="flex flex-col items-end">
+              <span className="text-sm font-medium text-gray-900">
+                Monthly Total: Rs {Math.round(calculateMonthlyTotal())}
+              </span>
+              <span className="text-sm font-medium text-red-600">
+                Monthly Debt: Rs {Math.round(calculateMonthlyDebt())}
+              </span>
+            </div>
+          </div>
+        </div>
+        <table className="min-w-full divide-y divide-gray-200">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Date</th>
+              <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Customer</th>
+              <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Payment</th>
+              <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Total (PKR)</th>
+              <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Paid (PKR)</th>
+              <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Remaining (PKR)</th>
+              <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="bg-white divide-y divide-gray-200">
+            {filteredSales.map((sale) => (
+              <tr key={sale.id} className={`hover:bg-gray-50 ${sale.isDebt ? 'bg-red-50' : ''}`}>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-center">
+                  {formatDate(sale.date)}
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-center">
+                  {sale.customerName}
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-center">
+                  {sale.paymentMethod}
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-center">
+                  {Math.round(sale.totalAmount) || '0'}
+                  {sale.discount > 0 && (
+                    <span className="text-xs text-red-600 ml-1">
+                      (-{sale.discount}%)
+                    </span>
+                  )}
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-center">
+                  {Math.round(sale.paidAmount || 0)}
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-red-600 text-center">
+                  {sale.remainingAmount > 0 ? Math.round(sale.remainingAmount) : '-'}
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-center space-x-2">
+                  <button
+                    onClick={() => handlePrint(sale)}
+                    className="text-blue-600 hover:text-blue-800"
+                    title="Print Receipt"
+                  >
+                    <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
+                    </svg>
+                  </button>
+                  {sale.remainingAmount > 0 && (
+                    <button
+                      onClick={() => handlePayRemaining(sale)}
+                      className="text-green-600 hover:text-green-800 ml-2"
+                      title="Pay Remaining"
+                    >
+                      <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                    </button>
+                  )}
+                  <button
+                    onClick={() => handleViewDetails(sale)}
+                    className="text-purple-600 hover:text-purple-800 ml-2"
+                    title="View Details"
+                  >
+                    <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                    </svg>
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Payment Modal */}
+      {showPaymentModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
+            <h3 className="text-lg font-semibold mb-4">Add Payment</h3>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Amount</label>
+                <input
+                  type="number"
+                  value={paymentAmount}
+                  onChange={(e) => setPaymentAmount(e.target.value)}
+                  className={`mt-1 block w-full border rounded-md shadow-sm p-2 ${
+                    paymentErrors.amount ? 'border-red-500' : 'border-gray-300'
+                  }`}
+                  min="0"
+                  step="0.01"
+                />
+                {paymentErrors.amount && (
+                  <p className="mt-1 text-sm text-red-600">{paymentErrors.amount}</p>
+                )}
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Payment Method</label>
+                <select
+                  value={paymentMethod}
+                  onChange={(e) => {
+                    setPaymentMethod(e.target.value);
+                    setPaymentErrors({});
+                  }}
+                  className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2"
+                >
+                  <option value="Cash">Cash</option>
+                  <option value="Card">Card</option>
+                  <option value="Cheque">Cheque</option>
+                  <option value="Other">Other</option>
+                </select>
+              </div>
+              {paymentMethod === 'Cheque' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Cheque Number</label>
+                  <input
+                    type="text"
+                    value={chequeNumber}
+                    onChange={(e) => setChequeNumber(e.target.value)}
+                    className={`mt-1 block w-full border rounded-md shadow-sm p-2 ${
+                      paymentErrors.chequeNumber ? 'border-red-500' : 'border-gray-300'
+                    }`}
+                    placeholder="Enter cheque number"
+                  />
+                  {paymentErrors.chequeNumber && (
+                    <p className="mt-1 text-sm text-red-600">{paymentErrors.chequeNumber}</p>
+                  )}
+                </div>
+              )}
+              {paymentMethod === 'Other' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Comment</label>
+                  <input
+                    type="text"
+                    value={paymentComment}
+                    onChange={(e) => setPaymentComment(e.target.value)}
+                    className={`mt-1 block w-full border rounded-md shadow-sm p-2 ${
+                      paymentErrors.comment ? 'border-red-500' : 'border-gray-300'
+                    }`}
+                    placeholder="Enter payment details"
+                  />
+                  {paymentErrors.comment && (
+                    <p className="mt-1 text-sm text-red-600">{paymentErrors.comment}</p>
+                  )}
+                </div>
+              )}
+              <div className="flex justify-end space-x-3">
+                <button
+                  onClick={() => {
+                    setShowPaymentModal(false);
+                    setPaymentAmount('');
+                    setPaymentMethod('Cash');
+                    setPaymentComment('');
+                    setChequeNumber('');
+                    setPaymentErrors({});
+                  }}
+                  className="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-gray-700 hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handlePaymentSubmit}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-md shadow-sm hover:bg-blue-700"
+                >
+                  Save Payment
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Payment History Modal */}
+      {showPaymentHistory && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-6xl p-6">
+            <div className="flex justify-between items-center mb-6">
+              <div>
+                <h3 className="text-xl font-semibold text-gray-900">Sale Details</h3>
+                <p className="text-sm text-gray-500 mt-1">Customer: {selectedSale?.customerName}</p>
+                <p className="text-sm text-gray-500">Phone: {selectedSale?.customerPhone || '-'}</p>
+                <p className="text-sm text-gray-500">Date: {formatDate(selectedSale?.date)}</p>
+              </div>
+              <div className="flex items-center space-x-4">
+                <button
+                  onClick={() => handlePrint(selectedSale)}
+                  className="text-blue-600 hover:text-blue-800 p-2 rounded-full hover:bg-blue-50"
+                  title="Print Details"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
+                  </svg>
+                </button>
+                <button
+                  onClick={() => setShowPaymentHistory(false)}
+                  className="text-gray-500 hover:text-gray-700"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-6">
+              {/* Items Section */}
+              <div className="bg-gray-50 rounded-lg p-4">
+                <h4 className="text-lg font-medium text-gray-900 mb-4">Items</h4>
+                <table className="w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-100">
+                    <tr>
+                      <th className="w-2/5 px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Product</th>
+                      <th className="w-1/5 px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Quantity</th>
+                      <th className="w-1/5 px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Price (PKR)</th>
+                      <th className="w-1/5 px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Total (PKR)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {selectedSale?.items.map((item, index) => {
+                      const price = item.unitPrice || item.price || 0;
+                      const quantity = item.quantity || 0;
+                      const total = price * quantity;
+                      return (
+                        <tr key={index} className="hover:bg-gray-50">
+                          <td className="px-3 py-2 text-sm text-gray-900">{item.name || '-'}</td>
+                          <td className="px-3 py-2 text-sm text-gray-500 text-right">{quantity}</td>
+                          <td className="px-3 py-2 text-sm text-gray-500 text-right">{Math.round(price)}</td>
+                          <td className="px-3 py-2 text-sm text-gray-900 text-right">{Math.round(total)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                  <tfoot className="bg-gray-100">
+                    <tr>
+                      <td colSpan="3" className="px-3 py-2 text-right text-sm font-medium text-gray-900">Subtotal:</td>
+                      <td className="px-3 py-2 text-right text-sm font-medium text-gray-900">
+                        {Math.round(selectedSale?.totalAmount)}
+                      </td>
+                    </tr>
+                    {selectedSale?.discount > 0 && (
+                      <tr>
+                        <td colSpan="3" className="px-3 py-2 text-right text-sm font-medium text-red-600">
+                          Discount ({selectedSale.discount}%):
+                        </td>
+                        <td className="px-3 py-2 text-right text-sm font-medium text-red-600">
+                          -{Math.round(selectedSale.discountAmount)}
+                        </td>
+                      </tr>
+                    )}
+                    <tr>
+                      <td colSpan="3" className="px-3 py-2 text-right text-sm font-medium text-gray-900">Total Amount:</td>
+                      <td className="px-3 py-2 text-right text-sm font-medium text-gray-900">
+                        {Math.round(selectedSale?.totalAmount - (selectedSale?.discountAmount || 0))}
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+
+              {/* Payment History Section */}
+              <div className="bg-gray-50 rounded-lg p-4">
+                <h4 className="text-lg font-medium text-gray-900 mb-4">Payment History</h4>
+                {paymentHistory.length === 0 ? (
+                  <div className="text-center py-4 text-gray-500">
+                    No payment history found for this sale.
+                  </div>
+                ) : (
+                  <table className="w-full divide-y divide-gray-200">
+                    <thead className="bg-gray-100">
+                      <tr>
+                        <th className="w-1/5 px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
+                        <th className="w-1/5 px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Amount (PKR)</th>
+                        <th className="w-1/5 px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Method</th>
+                        <th className="w-1/5 px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Details</th>
+                        <th className="w-1/5 px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {paymentHistory.map((payment) => (
+                        <tr key={payment.id} className={`hover:bg-gray-50 ${payment.isInitial ? 'bg-blue-50' : ''}`}>
+                          <td className="px-3 py-2 text-sm text-gray-500">
+                            {formatDate(payment.date)}
+                          </td>
+                          <td className="px-3 py-2 text-sm text-gray-900 text-right">
+                            {Math.round(payment.amount) || '0'}
+                          </td>
+                          <td className="px-3 py-2 text-sm text-gray-500">
+                            {payment.paymentMethod}
+                          </td>
+                          <td className="px-3 py-2 text-sm text-gray-500">
+                            {payment.chequeNumber ? `Cheque #${payment.chequeNumber}` : payment.comment || '-'}
+                          </td>
+                          <td className="px-3 py-2 text-sm text-gray-500">
+                            {payment.isInitial ? 'Initial Payment' : 'Additional Payment'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot className="bg-gray-100">
+                      <tr>
+                        <td colSpan="4" className="px-3 py-2 text-right text-sm font-medium text-gray-900">Total Paid:</td>
+                        <td className="px-3 py-2 text-right text-sm font-medium text-gray-900">
+                          PKR {Math.round(paymentHistory.reduce((sum, payment) => sum + (payment.amount || 0), 0))}
+                        </td>
+                      </tr>
+                      <tr>
+                        <td colSpan="4" className="px-3 py-2 text-right text-sm font-medium text-red-600">Remaining Amount:</td>
+                        <td className="px-3 py-2 text-right text-sm font-medium text-red-600">
+                          PKR {Math.round(selectedSale?.remainingAmount) || '0'}
+                        </td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default SalesTable; 
