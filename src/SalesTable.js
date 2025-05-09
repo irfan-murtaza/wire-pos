@@ -264,16 +264,15 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
       const newRemainingAmount = (selectedSale.remainingAmount || 0) - parseFloat(paymentAmount);
       const saleDoc = doc(db, 'receipts', selectedSale.id);
       
-      // Calculate total paid amount (initial payment + all additional payments)
+      // Calculate total paid amount from payment history
       const paymentHistoryQuery = query(
         collection(db, 'paymentHistory'),
         where('saleId', '==', selectedSale.id)
       );
       const paymentHistorySnapshot = await getDocs(paymentHistoryQuery);
-      const additionalPayments = paymentHistorySnapshot.docs.reduce((sum, doc) => 
+      const totalPaidAmount = paymentHistorySnapshot.docs.reduce((sum, doc) => 
         sum + (doc.data().amount || 0), 0
       );
-      const totalPaidAmount = (selectedSale.paidAmount || 0) + additionalPayments + parseFloat(paymentAmount);
       
       if (newRemainingAmount <= 0) {
         // If fully paid, update the sale document
