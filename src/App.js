@@ -18,6 +18,7 @@ function App() {
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, setUser);
     return () => unsubscribe();
+
   }, []);
 
   const handleAddNewSale = () => {
