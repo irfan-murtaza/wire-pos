@@ -3,6 +3,7 @@ import SalesTable from './SalesTable';
 import ReceiptForm from './ReceiptForm';
 import InventoryForm from './InventoryForm';
 import SupplierManagement from './SupplierManagement';
+import CustomerManagement from './CustomerManagement';
 import AuthForm from './AuthForm';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { auth } from './firebase';
@@ -76,6 +77,16 @@ function App() {
             >
               Suppliers
             </button>
+            <button
+              onClick={() => setActiveTab('customers')}
+              className={`px-4 py-2 rounded-md transition-all ${
+                activeTab === 'customers'
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+              }`}
+            >
+              Customers
+            </button>
           </div>
         </div>
 
@@ -99,8 +110,10 @@ function App() {
             </>
           ) : activeTab === 'inventory' ? (
             <InventoryForm />
-          ) : (
+          ) : activeTab === 'suppliers' ? (
             <SupplierManagement />
+          ) : (
+            <CustomerManagement />
           )}
         </div>
       </div>

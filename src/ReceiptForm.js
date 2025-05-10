@@ -263,7 +263,19 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
       await updateInventoryQuantities(items);
       
       // Then save the receipt
-      await addDoc(collection(db, 'receipts'), receiptData);
+      const receiptRef = await addDoc(collection(db, 'receipts'), receiptData);
+      
+      // Store the initial payment in payment history
+      const initialPaymentData = {
+        saleId: receiptRef.id,
+        amount: isPartialPayment ? paidAmount : total,
+        paymentMethod,
+        comment: paymentMethod === 'Other' ? comment : '',
+        chequeNumber: paymentMethod === 'Cheque' ? chequeNumber : '',
+        date: new Date().toISOString(),
+        isInitial: true
+      };
+      await addDoc(collection(db, 'paymentHistory'), initialPaymentData);
       
       onSave();
       resetForm();
