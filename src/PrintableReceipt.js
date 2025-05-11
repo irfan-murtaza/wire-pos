@@ -1,128 +1,221 @@
-export const generatePrintableHTML = (props) => {
-  const receiptHtml = `
+export function generatePrintableHTML({
+  customerName,
+  customerPhone,
+  items,
+  totalAmount,
+  date,
+  paymentMethod,
+  chequeNumber,
+  comment,
+  discount = 0,
+  discountAmount = 0,
+  subtotal,
+  paidAmount,
+  remainingAmount,
+  isCustomerReport = false,
+  paymentHistory = []
+}) {
+  const formatDate = (dateString) => {
+    return new Date(dateString).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+
+  // Ensure payment history includes initial payment if it exists
+  let allPayments = [...paymentHistory];
+  if (paidAmount > 0 && !allPayments.some(p => p.type === 'Initial Payment')) {
+    // Get the initial payment amount from the sale record
+    const initialPaymentAmount = paidAmount - allPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
+    if (initialPaymentAmount > 0) {
+      allPayments.unshift({
+        amount: initialPaymentAmount,
+        method: paymentMethod,
+        date: date,
+        chequeNumber: chequeNumber || '',
+        comment: comment || '',
+        type: 'Initial Payment'
+      });
+    }
+  }
+
+  // Sort payments by date
+  allPayments = allPayments.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+  return `
     <!DOCTYPE html>
     <html>
       <head>
-        <title>AAF Cables – ${props.isCustomerReport ? 'Customer Report' : 'Receipt'}</title>
-        <meta charset="utf-8">
+        <title>Receipt</title>
         <style>
           body {
-            font-family: monospace;
-            padding: 40px;
+            font-family: Arial, sans-serif;
             margin: 0;
-            background: white;
+            padding: 20px;
           }
-          table, th, td {
-            border: 1px solid black;
-            border-collapse: collapse;
-          }
-          th, td {
-            padding: 6px;
-            text-align: center;
-          }
-          h2 {
-            text-align: center;
-            margin-bottom: 20px;
-          }
-          .text-right {
-            text-align: right;
-          }
-          .text-red {
-            color: red;
-          }
-          .text-bold {
-            font-weight: bold;
-          }
-          .mt-4 {
-            margin-top: 16px;
-          }
-          .amount-summary {
-            text-align: right;
-            margin-top: 20px;
+          .receipt {
+            max-width: 800px;
+            margin: 0 auto;
           }
           .header {
             text-align: center;
             margin-bottom: 20px;
           }
-          .header h1 {
-            margin: 0;
-            font-size: 24px;
+          .customer-info {
+            margin-bottom: 20px;
           }
-          .header p {
-            margin: 5px 0;
+          table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+          }
+          th, td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+          }
+          th {
+            background-color: #f5f5f5;
+          }
+          .total-section {
+            margin-top: 20px;
+            text-align: right;
+          }
+          .payment-history {
+            margin-top: 30px;
+          }
+          .payment-history h3 {
+            margin-bottom: 10px;
+          }
+          .payment-history table {
+            margin-top: 10px;
           }
           .footer {
             margin-top: 30px;
             text-align: center;
-            font-size: 12px;
+            font-size: 0.9em;
+            color: #666;
+          }
+          @media print {
+            body {
+              padding: 0;
+            }
+            .receipt {
+              max-width: none;
+            }
           }
         </style>
       </head>
       <body>
-        <div class="header">
-          <h1>AAF Cables</h1>
-          <p>${props.isCustomerReport ? 'CUSTOMER REPORT' : 'SALES RECEIPT'}</p>
-        </div>
+        <div class="receipt">
+          <div class="header">
+            <h2>Sales Receipt</h2>
+            <p>Date: ${formatDate(date)}</p>
+          </div>
 
-        <p>Date: ${new Date(props.date).toLocaleDateString()}</p>
-        <p>Customer: ${props.customerName}</p>
-        <p>Phone: ${props.customerPhone || '-'}</p>
+          <div class="customer-info">
+            <p><strong>Customer Name:</strong> ${customerName}</p>
+            <p><strong>Phone:</strong> ${customerPhone || '-'}</p>
+          </div>
 
-        <table width="100%">
-          <thead>
-            <tr>
-              <th>Product</th>
-              <th>Qty</th>
-              <th>Price</th>
-              <th>Amount</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${props.items.map(i => `
+          <table>
+            <thead>
               <tr>
-                <td>${i.name}</td>
-                <td>${i.quantity}</td>
-                <td>${Math.round(i.price)}</td>
-                <td>${Math.round(i.price * i.quantity)}</td>
+                <th>Product</th>
+                <th>Quantity</th>
+                <th>Price (PKR)</th>
+                <th>Total (PKR)</th>
               </tr>
-            `).join('')}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              ${items.map(item => {
+                const price = item.salesPrice || item.price || 0;
+                const quantity = item.quantity || 0;
+                const total = price * quantity;
+                return `
+                  <tr>
+                    <td>${item.name}</td>
+                    <td>${quantity}</td>
+                    <td>${Math.round(price)}</td>
+                    <td>${Math.round(total)}</td>
+                  </tr>
+                `;
+              }).join('')}
+            </tbody>
+            <tfoot>
+              <tr>
+                <td colspan="3" style="text-align: right;"><strong>Subtotal:</strong></td>
+                <td>${Math.round(subtotal)}</td>
+              </tr>
+              ${discount > 0 ? `
+                <tr>
+                  <td colspan="3" style="text-align: right;"><strong>Discount (${discount}%):</strong></td>
+                  <td>-${Math.round(discountAmount)}</td>
+                </tr>
+              ` : ''}
+              <tr>
+                <td colspan="3" style="text-align: right;"><strong>Total Amount:</strong></td>
+                <td>${Math.round(totalAmount)}</td>
+              </tr>
+              <tr>
+                <td colspan="3" style="text-align: right;"><strong>Paid Amount:</strong></td>
+                <td>${Math.round(paidAmount)}</td>
+              </tr>
+              ${remainingAmount > 0 ? `
+                <tr>
+                  <td colspan="3" style="text-align: right;"><strong>Remaining Amount:</strong></td>
+                  <td>${Math.round(remainingAmount)}</td>
+                </tr>
+              ` : ''}
+            </tfoot>
+          </table>
 
-        <div class="amount-summary">
-          <p>Subtotal: Rs ${Math.round(props.subtotal || 0)}</p>
-          ${props.discount > 0 ? `
-            <p class="text-red">
-              Discount (${props.discount}%): – Rs ${Math.round(props.discountAmount || 0)}
-            </p>
-          ` : ''}
-          <p class="text-bold">
-            Total Amount: Rs ${Math.round(props.totalAmount || 0)}
-          </p>
-          <p>Paid Amount: Rs ${Math.round(props.paidAmount || 0)}</p>
-          ${props.remainingAmount > 0 ? `
-            <p class="text-red">
-              Remaining Amount: Rs ${Math.round(props.remainingAmount || 0)}
-            </p>
-          ` : ''}
-        </div>
+          <div class="payment-history">
+            <h3>Payment History</h3>
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Amount (PKR)</th>
+                  <th>Method</th>
+                  <th>Details</th>
+                  <th>Type</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${allPayments.map(payment => `
+                  <tr>
+                    <td>${formatDate(payment.date)}</td>
+                    <td>${Math.round(payment.amount)}</td>
+                    <td>${payment.method || 'Cash'}</td>
+                    <td>${payment.chequeNumber ? `Cheque #${payment.chequeNumber}` : payment.comment || '-'}</td>
+                    <td>${payment.type}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+              <tfoot>
+                <tr>
+                  <td colspan="4" style="text-align: right;"><strong>Total Paid:</strong></td>
+                  <td>PKR ${Math.round(paidAmount)}</td>
+                </tr>
+                ${remainingAmount > 0 ? `
+                  <tr>
+                    <td colspan="4" style="text-align: right;"><strong>Remaining Amount:</strong></td>
+                    <td>PKR ${Math.round(remainingAmount)}</td>
+                  </tr>
+                ` : ''}
+              </tfoot>
+            </table>
+          </div>
 
-        ${!props.isCustomerReport ? `
-          <p><strong>Sale Made With:</strong></p>
-          <p>[${props.paymentMethod === 'Cash' ? '✔' : ' '}] Cash</p>
-          <p>[${props.paymentMethod === 'Card' ? '✔' : ' '}] Credit Card</p>
-          <p>
-            [${props.paymentMethod === 'Cheque' ? '✔' : ' '}] Cheque, No: ${props.chequeNumber || ''}
-          </p>
-          <p>[${props.paymentMethod === 'Other' ? '✔' : ' '}] ${props.comment || ''}</p>
-        ` : ''}
-
-        <div class="footer">
-          <p>Thank you for your business!</p>
+          <div class="footer">
+            <p>Thank you for your business!</p>
+          </div>
         </div>
       </body>
     </html>
   `;
-
-  return receiptHtml;
-};
+}

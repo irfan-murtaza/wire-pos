@@ -13,13 +13,14 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
   const [chequeNumber, setChequeNumber] = useState('');
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
-  const [items, setItems] = useState([{ name: '', quantity: 1, price: 0 }]);
+  const [items, setItems] = useState([{ name: '', quantity: 1, costPrice: 0, salesPrice: 0 }]);
   const [inventoryProducts, setInventoryProducts] = useState([]);
   const [errors, setErrors] = useState({});
   const [discount, setDiscount] = useState(0);
   const [showDiscount, setShowDiscount] = useState(false);
   const [paidAmount, setPaidAmount] = useState(0);
   const [isPartialPayment, setIsPartialPayment] = useState(false);
+  const [paymentHistory, setPaymentHistory] = useState([]);
 
   useEffect(() => {
     if (isOpen) {
@@ -54,9 +55,27 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
   }, [showPrint]);
 
   const handlePrint = () => {
+    const { subtotal, discountAmount, total } = calculateTotal();
+    const initialPayment = isPartialPayment ? paidAmount : total;
+    
+    // Create initial payment record for printing
+    const initialPaymentRecord = {
+      amount: initialPayment,
+      method: paymentMethod,
+      date: new Date().toISOString(),
+      chequeNumber: paymentMethod === 'Cheque' ? chequeNumber : '',
+      comment: paymentMethod === 'Other' ? comment : '',
+      type: 'Initial Payment'
+    };
+
     const html = generatePrintableHTML({
       customerName,
-      items,
+      customerPhone,
+      items: items.map(item => ({
+        name: item.name,
+        quantity: item.quantity,
+        price: item.salesPrice
+      })),
       totalAmount: total,
       date: new Date().toISOString(),
       paymentMethod,
@@ -64,11 +83,14 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
       comment,
       discount: showDiscount ? discount : 0,
       discountAmount: showDiscount ? discountAmount : 0,
-      subtotal
+      subtotal,
+      paidAmount: initialPayment,
+      remainingAmount: isPartialPayment ? (total - paidAmount) : 0,
+      isCustomerReport: false,
+      paymentHistory: [initialPaymentRecord] // Only show the initial payment
     });
   
     const printWindow = window.open('', '_blank', 'width=800,height=600');
-  
     printWindow.document.open();
     printWindow.document.write(html);
     printWindow.document.close();
@@ -87,7 +109,8 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
       newItems[index] = {
         ...newItems[index],
         name: value,
-        price: selectedProduct ? selectedProduct.unitPrice : 0,
+        costPrice: selectedProduct ? selectedProduct.unitPrice : 0,
+        salesPrice: selectedProduct ? selectedProduct.unitPrice : 0,
         availableQuantity: selectedProduct ? selectedProduct.quantity : 0
       };
       setErrors(prev => {
@@ -115,30 +138,38 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
       newItems[index] = {
         ...newItems[index],
         quantity: value,
-        totalPrice: value * newItems[index].price
+        totalPrice: value * newItems[index].salesPrice
+      };
+    } else if (field === 'salesPrice') {
+      newItems[index] = {
+        ...newItems[index],
+        salesPrice: value,
+        totalPrice: value * newItems[index].quantity
       };
     }
     setItems(newItems);
   };
 
   const addItem = () => {
-    setItems([...items, { name: '', quantity: 1, price: 0 }]);
+    setItems([...items, { name: '', quantity: 1, costPrice: 0, salesPrice: 0 }]);
   };
 
   const calculateTotal = () => {
-    const subtotal = items.reduce((sum, item) => sum + (item.quantity * item.price), 0);
+    const subtotal = items.reduce((sum, item) => sum + (item.quantity * item.salesPrice), 0);
+    const costTotal = items.reduce((sum, item) => sum + (item.quantity * item.costPrice), 0);
     const discountAmount = (subtotal * discount) / 100;
     const total = subtotal - discountAmount;
     const remainingAmount = total - paidAmount;
     return {
       subtotal,
+      costTotal,
       discountAmount,
       total,
       remainingAmount
     };
   };
 
-  const { subtotal, discountAmount, total, remainingAmount } = calculateTotal();
+  const { subtotal, costTotal, discountAmount, total, remainingAmount } = calculateTotal();
 
   const validateForm = () => {
     const newErrors = {};
@@ -243,46 +274,59 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
     }
 
     try {
+      const { subtotal, discountAmount, total } = calculateTotal();
+      const initialPayment = isPartialPayment ? paidAmount : total;
+      
+      // Create the receipt data
       const receiptData = {
         customerName,
         customerPhone,
-        date: new Date().toISOString(),
-        items,
+        items: items.map(item => ({
+          name: item.name,
+          quantity: item.quantity,
+          costPrice: item.costPrice,
+          salesPrice: item.salesPrice,
+          totalPrice: item.quantity * item.salesPrice
+        })),
         totalAmount: total,
-        paidAmount: isPartialPayment ? paidAmount : total,
-        remainingAmount: isPartialPayment ? remainingAmount : 0,
-        paymentMethod,
+        paidAmount: initialPayment,
+        remainingAmount: isPartialPayment ? (total - paidAmount) : 0,
+        date: new Date().toISOString(),
+        paymentMethod: paymentMethod,
         chequeNumber: paymentMethod === 'Cheque' ? chequeNumber : '',
         comment: paymentMethod === 'Other' ? comment : '',
         discount: showDiscount ? discount : 0,
         discountAmount: showDiscount ? discountAmount : 0,
-        isDebt: isPartialPayment
+        subtotal,
+        isDebt: isPartialPayment && (total - paidAmount) > 0
       };
 
-      // First update the inventory quantities
+      // Add the receipt to Firestore
+      const docRef = await addDoc(collection(db, 'receipts'), receiptData);
+
+      // Update inventory quantities
       await updateInventoryQuantities(items);
-      
-      // Then save the receipt
-      const receiptRef = await addDoc(collection(db, 'receipts'), receiptData);
-      
-      // Store the initial payment in payment history
-      const initialPaymentData = {
-        saleId: receiptRef.id,
-        amount: isPartialPayment ? paidAmount : total,
-        paymentMethod,
-        comment: paymentMethod === 'Other' ? comment : '',
-        chequeNumber: paymentMethod === 'Cheque' ? chequeNumber : '',
+
+      // Create initial payment record
+      const paymentHistoryData = {
+        saleId: docRef.id,
+        amount: initialPayment,
+        paymentMethod: paymentMethod,
         date: new Date().toISOString(),
-        isInitial: true
+        chequeNumber: paymentMethod === 'Cheque' ? chequeNumber : '',
+        comment: paymentMethod === 'Other' ? comment : '',
+        type: 'Initial Payment'
       };
-      await addDoc(collection(db, 'paymentHistory'), initialPaymentData);
       
-      onSave();
+      // Add the initial payment to payment history
+      await addDoc(collection(db, 'paymentHistory'), paymentHistoryData);
+
+      handlePrint();
       resetForm();
-      onClose();
+      onSave();
     } catch (error) {
       console.error('Error saving receipt:', error);
-      alert(`Error: ${error.message}`);
+      alert(`Error saving receipt: ${error.message}`);
     }
   };
 
@@ -292,12 +336,13 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
     setChequeNumber('');
     setCustomerName('');
     setCustomerPhone('');
-    setItems([{ name: '', quantity: 1, price: 0 }]);
+    setItems([{ name: '', quantity: 1, costPrice: 0, salesPrice: 0 }]);
     setErrors({});
     setDiscount(0);
     setShowDiscount(false);
     setPaidAmount(0);
     setIsPartialPayment(false);
+    setPaymentHistory([]);
   };
 
   const removeItem = (index) => {
@@ -373,7 +418,8 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
             <div className="grid grid-cols-1 sm:grid-cols-5 gap-3 font-medium text-gray-700">
               <div className="px-3 py-2">Product Name</div>
               <div className="px-3 py-2">Quantity</div>
-              <div className="px-3 py-2">Unit Price</div>
+              <div className="px-3 py-2">Cost Price</div>
+              <div className="px-3 py-2">Sales Price</div>
               <div className="px-3 py-2">Total</div>
               <div className="px-3 py-2">Actions</div>
             </div>
@@ -418,12 +464,24 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
                 </div>
                 <div>
                   <div className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm bg-gray-50">
-                    <div className="text-gray-700">Rs {Math.round(item.price)}</div>
+                    <div className="text-gray-700">Rs {Math.round(item.costPrice)}</div>
                   </div>
                 </div>
                 <div>
+                  <input
+                    type="number"
+                    value={item.salesPrice}
+                    onChange={(e) => {
+                      const value = Math.round(parseFloat(e.target.value) || 0);
+                      handleItemChange(idx, 'salesPrice', value);
+                    }}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm"
+                    min="0"
+                  />
+                </div>
+                <div>
                   <div className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm bg-gray-50">
-                    <div className="text-gray-700">Rs {Math.round(item.quantity * item.price)}</div>
+                    <div className="text-gray-700">Rs {Math.round(item.quantity * item.salesPrice)}</div>
                   </div>
                 </div>
                 <div className="flex items-center">

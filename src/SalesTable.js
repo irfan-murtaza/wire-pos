@@ -162,19 +162,25 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
       
       let history = [];
       
-      if (!querySnapshot.empty) {
-        history = querySnapshot.docs.map(doc => {
-          const data = doc.data();
-          console.log('Payment data:', data);
-          return {
-            id: doc.id,
-            ...data,
-            date: data.date || new Date().toISOString(),
-            amount: Math.round(data.amount || 0),
-            isInitial: false
-          };
-        });
+      // Get all payment records
+      const paymentRecords = querySnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+        date: doc.data().date || new Date().toISOString(),
+        amount: Math.round(doc.data().amount || 0)
+      }));
+
+      // Find the initial payment record
+      const initialPayment = paymentRecords.find(payment => payment.type === 'Initial Payment');
+      
+      // Add initial payment if it exists
+      if (initialPayment) {
+        history.push(initialPayment);
       }
+
+      // Add additional payments (excluding the initial payment)
+      const additionalPayments = paymentRecords.filter(payment => payment.type === 'Additional Payment');
+      history = [...history, ...additionalPayments];
 
       // Sort payments by date
       history = history.sort((a, b) => new Date(b.date) - new Date(a.date));
@@ -191,7 +197,6 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
       });
       setPaymentHistory([]);
       setShowPaymentHistory(true);
-      alert('Error fetching payment history. Please check console for details.');
     }
   };
 
@@ -224,7 +229,8 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
         paymentMethod,
         comment: paymentMethod === 'Other' ? paymentComment : '',
         chequeNumber: paymentMethod === 'Cheque' ? chequeNumber : '',
-        date: new Date().toISOString()
+        date: new Date().toISOString(),
+        type: 'Additional Payment'
       };
 
       await addDoc(collection(db, 'paymentHistory'), paymentData);
@@ -233,12 +239,14 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
       const newRemainingAmount = (selectedSale.remainingAmount || 0) - parseFloat(paymentAmount);
       const saleDoc = doc(db, 'receipts', selectedSale.id);
       
-      // Calculate total paid amount from payment history
+      // Get all payment records to calculate total paid amount
       const paymentHistoryQuery = query(
         collection(db, 'paymentHistory'),
         where('saleId', '==', selectedSale.id)
       );
       const paymentHistorySnapshot = await getDocs(paymentHistoryQuery);
+      
+      // Calculate total paid amount from all payment records
       const totalPaidAmount = paymentHistorySnapshot.docs.reduce((sum, doc) => 
         sum + (doc.data().amount || 0), 0
       );
@@ -381,12 +389,6 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
             </svg>
-          </button>
-          <button
-            onClick={onAddNewSale}
-            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md shadow-sm transition-all"
-          >
-            Add New Sale
           </button>
         </div>
       </div>
@@ -776,7 +778,7 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
                             {payment.chequeNumber ? `Cheque #${payment.chequeNumber}` : payment.comment || '-'}
                           </td>
                           <td className="px-3 py-2 text-sm text-gray-500">
-                            Additional Payment
+                            {payment.type}
                           </td>
                         </tr>
                       ))}
