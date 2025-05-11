@@ -321,7 +321,7 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
       // Add the initial payment to payment history
       await addDoc(collection(db, 'paymentHistory'), paymentHistoryData);
 
-      handlePrint();
+      // Remove automatic printing
       resetForm();
       onSave();
     } catch (error) {
@@ -509,7 +509,7 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
           </div>
         </div>
 
-        <div className="p-6 flex-none border-t">
+        <div className="p-6 flex-none border-t overflow-y-auto">
           <div className="space-y-4">
             <div className="flex justify-between items-center">
               <div className="text-gray-700">Subtotal:</div>
