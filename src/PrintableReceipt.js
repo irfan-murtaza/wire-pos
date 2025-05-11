@@ -45,6 +45,38 @@ export function generatePrintableHTML({
   // Sort payments by date
   allPayments = allPayments.sort((a, b) => new Date(b.date) - new Date(a.date));
 
+  const generatePaymentHistoryTable = (paymentHistory) => {
+    if (!paymentHistory || paymentHistory.length === 0) return '';
+
+    return `
+      <div class="payment-history">
+        <h3>Payment History</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Amount (PKR)</th>
+              <th>Method</th>
+              <th>Details</th>
+              <th>Type</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${paymentHistory.map(payment => `
+              <tr>
+                <td>${formatDate(payment.date)}</td>
+                <td>${Math.round(payment.amount)}</td>
+                <td>${payment.paymentMethod || payment.method || 'Cash'}</td>
+                <td>${payment.chequeNumber ? `Cheque #${payment.chequeNumber}` : payment.comment || '-'}</td>
+                <td>${payment.type}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  };
+
   return `
     <!DOCTYPE html>
     <html>
@@ -173,43 +205,7 @@ export function generatePrintableHTML({
             </tfoot>
           </table>
 
-          <div class="payment-history">
-            <h3>Payment History</h3>
-            <table>
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Amount (PKR)</th>
-                  <th>Method</th>
-                  <th>Details</th>
-                  <th>Type</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${allPayments.map(payment => `
-                  <tr>
-                    <td>${formatDate(payment.date)}</td>
-                    <td>${Math.round(payment.amount)}</td>
-                    <td>${payment.method || 'Cash'}</td>
-                    <td>${payment.chequeNumber ? `Cheque #${payment.chequeNumber}` : payment.comment || '-'}</td>
-                    <td>${payment.type}</td>
-                  </tr>
-                `).join('')}
-              </tbody>
-              <tfoot>
-                <tr>
-                  <td colspan="4" style="text-align: right;"><strong>Total Paid:</strong></td>
-                  <td>PKR ${Math.round(paidAmount)}</td>
-                </tr>
-                ${remainingAmount > 0 ? `
-                  <tr>
-                    <td colspan="4" style="text-align: right;"><strong>Remaining Amount:</strong></td>
-                    <td>PKR ${Math.round(remainingAmount)}</td>
-                  </tr>
-                ` : ''}
-              </tfoot>
-            </table>
-          </div>
+          ${generatePaymentHistoryTable(allPayments)}
 
           <div class="footer">
             <p>Thank you for your business!</p>
