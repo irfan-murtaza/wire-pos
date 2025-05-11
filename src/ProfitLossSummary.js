@@ -70,7 +70,7 @@ const ProfitLossSummary = () => {
 
       console.log('Total purchases:', totalPurchases);
 
-      // --- Sales Revenue in period ---
+      // --- Sales Revenue in period -- -
       const salesQuery = query(
         collection(db, 'receipts'),
         orderBy('createdAt', 'desc')
