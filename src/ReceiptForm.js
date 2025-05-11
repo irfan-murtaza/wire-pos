@@ -535,7 +535,7 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
                   <p className="mt-1 text-sm text-red-600">{errors.paidAmount}</p>
                 )}
                 <div className="mt-2 text-sm text-gray-600">
-                  Remaining Amount: Rs {remainingAmount.toFixed(2)}
+                  Remaining Amount: Rs {Math.round(remainingAmount)}
                 </div>
               </div>
             )}

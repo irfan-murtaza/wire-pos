@@ -104,23 +104,9 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
       const querySnapshot = await getDocs(paymentHistoryQuery);
       const paymentHistory = querySnapshot.docs.map(doc => ({
         ...doc.data(),
-        date: doc.data().date || new Date().toISOString()
+        date: doc.data().date || new Date().toISOString(),
+        amount: Math.round(doc.data().amount || 0)
       }));
-
-      // Create initial payment record
-      const initialPayment = {
-        amount: sale.paidAmount || sale.totalAmount,
-        paymentMethod: sale.paymentMethod,
-        date: sale.date,
-        comment: sale.comment || '',
-        chequeNumber: sale.chequeNumber || '',
-        isInitial: true
-      };
-
-      // Always include payment history
-      const allPayments = [initialPayment, ...paymentHistory].sort((a, b) => 
-        new Date(b.date) - new Date(a.date)
-      );
 
       const html = generatePrintableHTML({
         customerName: sale.customerName,
@@ -136,20 +122,16 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
         discount: sale.discount || 0,
         discountAmount: sale.discountAmount || 0,
         subtotal: sale.totalAmount + (sale.discountAmount || 0),
-        paymentHistory: allPayments
+        paymentHistory: paymentHistory
       });
     
       const printWindow = window.open('', '_blank', 'width=800,height=600');
-    
       printWindow.document.open();
       printWindow.document.write(html);
       printWindow.document.close();
-    
-      printWindow.onload = function () {
-        printWindow.focus();
-        printWindow.print();
-        printWindow.close();
-      };
+      printWindow.focus();
+      printWindow.print();
+      printWindow.close();
     } catch (error) {
       console.error('Error generating printable receipt:', error);
       alert('Error generating receipt. Please check console for details.');
@@ -178,17 +160,6 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
       const querySnapshot = await getDocs(paymentHistoryQuery);
       console.log('Query snapshot:', querySnapshot.docs.map(doc => doc.data()));
       
-      // Create initial payment record from sale data
-      const initialPayment = {
-        id: 'initial',
-        amount: sale.paidAmount || sale.totalAmount,
-        paymentMethod: sale.paymentMethod,
-        date: sale.date,
-        comment: sale.comment || '',
-        chequeNumber: sale.chequeNumber || '',
-        isInitial: true
-      };
-
       let history = [];
       
       if (!querySnapshot.empty) {
@@ -199,16 +170,14 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
             id: doc.id,
             ...data,
             date: data.date || new Date().toISOString(),
-            amount: data.amount || 0,
+            amount: Math.round(data.amount || 0),
             isInitial: false
           };
         });
       }
 
-      // Combine initial payment with other payments and sort by date
-      history = [initialPayment, ...history].sort((a, b) => 
-        new Date(b.date) - new Date(a.date)
-      );
+      // Sort payments by date
+      history = history.sort((a, b) => new Date(b.date) - new Date(a.date));
 
       console.log('Processed payment history:', history);
       setPaymentHistory(history);
@@ -736,7 +705,7 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
                     <tr>
                       <td colSpan="3" className="px-3 py-2 text-right text-sm font-medium text-gray-900">Subtotal:</td>
                       <td className="px-3 py-2 text-right text-sm font-medium text-gray-900">
-                        {Math.round(selectedSale?.totalAmount)}
+                        {Math.round(selectedSale?.totalAmount + (selectedSale?.discountAmount || 0))}
                       </td>
                     </tr>
                     {selectedSale?.discount > 0 && (
@@ -752,9 +721,23 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
                     <tr>
                       <td colSpan="3" className="px-3 py-2 text-right text-sm font-medium text-gray-900">Total Amount:</td>
                       <td className="px-3 py-2 text-right text-sm font-medium text-gray-900">
-                        {Math.round(selectedSale?.totalAmount - (selectedSale?.discountAmount || 0))}
+                        {Math.round(selectedSale?.totalAmount)}
                       </td>
                     </tr>
+                    <tr>
+                      <td colSpan="3" className="px-3 py-2 text-right text-sm font-medium text-gray-900">Paid Amount:</td>
+                      <td className="px-3 py-2 text-right text-sm font-medium text-gray-900">
+                        {Math.round(selectedSale?.paidAmount || 0)}
+                      </td>
+                    </tr>
+                    {selectedSale?.remainingAmount > 0 && (
+                      <tr>
+                        <td colSpan="3" className="px-3 py-2 text-right text-sm font-medium text-red-600">Remaining Amount:</td>
+                        <td className="px-3 py-2 text-right text-sm font-medium text-red-600">
+                          {Math.round(selectedSale.remainingAmount)}
+                        </td>
+                      </tr>
+                    )}
                   </tfoot>
                 </table>
               </div>
@@ -779,7 +762,7 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
                     </thead>
                     <tbody className="bg-white divide-y divide-gray-200">
                       {paymentHistory.map((payment) => (
-                        <tr key={payment.id} className={`hover:bg-gray-50 ${payment.isInitial ? 'bg-blue-50' : ''}`}>
+                        <tr key={payment.id} className="hover:bg-gray-50">
                           <td className="px-3 py-2 text-sm text-gray-500">
                             {formatDate(payment.date)}
                           </td>
@@ -793,7 +776,7 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
                             {payment.chequeNumber ? `Cheque #${payment.chequeNumber}` : payment.comment || '-'}
                           </td>
                           <td className="px-3 py-2 text-sm text-gray-500">
-                            {payment.isInitial ? 'Initial Payment' : 'Additional Payment'}
+                            Additional Payment
                           </td>
                         </tr>
                       ))}
@@ -802,7 +785,7 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
                       <tr>
                         <td colSpan="4" className="px-3 py-2 text-right text-sm font-medium text-gray-900">Total Paid:</td>
                         <td className="px-3 py-2 text-right text-sm font-medium text-gray-900">
-                          PKR {Math.round(paymentHistory.reduce((sum, payment) => sum + (payment.amount || 0), 0))}
+                          PKR {Math.round(selectedSale?.paidAmount) || '0'}
                         </td>
                       </tr>
                       <tr>

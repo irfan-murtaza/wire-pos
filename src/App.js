@@ -4,6 +4,7 @@ import ReceiptForm from './ReceiptForm';
 import InventoryForm from './InventoryForm';
 import SupplierManagement from './SupplierManagement';
 import CustomerManagement from './CustomerManagement';
+import ProfitLossSummary from './ProfitLossSummary';
 import AuthForm from './AuthForm';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { auth } from './firebase';
@@ -87,6 +88,16 @@ function App() {
             >
               Customers
             </button>
+            <button
+              onClick={() => setActiveTab('profitLoss')}
+              className={`px-4 py-2 rounded-md transition-all ${
+                activeTab === 'profitLoss'
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+              }`}
+            >
+              Profit & Loss
+            </button>
           </div>
         </div>
 
@@ -112,8 +123,10 @@ function App() {
             <InventoryForm />
           ) : activeTab === 'suppliers' ? (
             <SupplierManagement />
-          ) : (
+          ) : activeTab === 'customers' ? (
             <CustomerManagement />
+          ) : (
+            <ProfitLossSummary />
           )}
         </div>
       </div>
