@@ -319,7 +319,7 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
             <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 font-medium text-gray-700">
               <div className="px-3 py-2">Product Name</div>
               <div className="px-3 py-2">Quantity</div>
-              <div className="px-3 py-2">Price (PKR)</div>
+              <div className="px-3 py-2">Price Per Unit (PKR)</div>
               <div className="px-3 py-2">Total (PKR)</div>
               <div className="px-3 py-2">Actions</div>
             </div>
@@ -342,13 +342,21 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
                 <div>
                   <input
                     type="number"
-                    value={item.quantity}
-                    onChange={(e) => handleItemChange(idx, 'quantity', parseInt(e.target.value) || 0)}
+                    value={item.quantity === 0 ? '' : item.quantity}
+                    onChange={(e) => {
+                      let val = e.target.value;
+                      if (val.length > 1 && val.startsWith('0')) {
+                        val = val.replace(/^0+/, '');
+                      }
+                      const number = parseInt(val, 10);
+                      handleItemChange(idx, 'quantity', isNaN(number) ? 0 : number);
+                    }}
                     placeholder="Quantity"
                     className={`w-full px-3 py-2 border rounded-md shadow-sm ${
                       errors[`itemQuantity${idx}`] ? 'border-red-500' : 'border-gray-300'
                     }`}
                     min="1"
+                    step="1"
                   />
                   {errors[`itemQuantity${idx}`] && (
                     <p className="mt-1 text-sm text-red-600">{errors[`itemQuantity${idx}`]}</p>
@@ -357,14 +365,21 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
                 <div>
                   <input
                     type="number"
-                    value={item.price}
-                    onChange={(e) => handleItemChange(idx, 'price', parseFloat(e.target.value) || 0)}
+                    value={item.price === 0 ? '' : item.price}
+                    onChange={(e) => {
+                      let val = e.target.value;
+                      if (val.length > 1 && val.startsWith('0')) {
+                        val = val.replace(/^0+/, '');
+                      }
+                      const intValue = Math.round(parseFloat(val) || 0);
+                      handleItemChange(idx, 'price', intValue);
+                    }}
                     placeholder="Price"
                     className={`w-full px-3 py-2 border rounded-md shadow-sm ${
                       errors[`itemPrice${idx}`] ? 'border-red-500' : 'border-gray-300'
                     }`}
                     min="0"
-                    step="0.01"
+                    step="1"
                   />
                   {errors[`itemPrice${idx}`] && (
                     <p className="mt-1 text-sm text-red-600">{errors[`itemPrice${idx}`]}</p>
@@ -468,11 +483,14 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
                 <label className="block text-sm font-medium text-gray-700 mb-1">Paid Amount</label>
                 <input
                   type="number"
-                  value={paidAmount}
+                  value={paidAmount === 0 ? '' : paidAmount}
                   onChange={(e) => {
-                    // Only allow integer values for paid amount
-                    const value = e.target.value === '' ? '' : Math.round(parseFloat(e.target.value) || 0);
-                    setPaidAmount(value);
+                    let val = e.target.value;
+                    if (val.length > 1 && val.startsWith('0')) {
+                      val = val.replace(/^0+/, '');
+                    }
+                    const parsed = parseInt(val, 10);
+                    setPaidAmount(isNaN(parsed) ? 0 : parsed);
                   }}
                   className={`w-full px-4 py-2 border rounded-md shadow-sm ${
                     errors.paidAmount ? 'border-red-500' : 'border-gray-300'
