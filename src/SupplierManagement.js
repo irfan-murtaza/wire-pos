@@ -65,11 +65,11 @@ function SupplierManagement() {
       const productsList = querySnapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data(),
-        unitPrice: doc.data().unitPrice || 0,
-        quantity: doc.data().quantity || 0,
-        totalPrice: doc.data().totalPrice || 0,
-        paidAmount: doc.data().paidAmount || 0,
-        remainingAmount: doc.data().remainingAmount || 0
+        unitPrice: Math.round(doc.data().unitPrice || 0),
+        quantity: Math.round(doc.data().quantity || 0),
+        totalPrice: Math.round(doc.data().totalPrice || 0),
+        paidAmount: Math.round(doc.data().paidAmount || 0),
+        remainingAmount: Math.round(doc.data().remainingAmount || 0)
       }));
       setSupplierProducts(productsList);
     } catch (error) {
@@ -171,8 +171,13 @@ function SupplierManagement() {
 
   const validatePayment = () => {
     const newErrors = {};
-    if (!payment.amount || parseFloat(payment.amount) <= 0) {
+    const paymentAmount = Math.round(parseFloat(payment.amount));
+    const remainingAmount = Math.round(selectedSupplier.product.remainingAmount);
+
+    if (!payment.amount || paymentAmount <= 0) {
       newErrors.amount = 'Payment amount must be greater than 0';
+    } else if (paymentAmount > remainingAmount) {
+      newErrors.amount = `Payment amount cannot exceed remaining amount (Rs ${Math.round(remainingAmount)})`;
     }
     if (!payment.date) {
       newErrors.date = 'Payment date is required';
@@ -212,21 +217,37 @@ function SupplierManagement() {
     if (!validateProduct()) return;
 
     try {
-      const totalPrice = newProduct.unitPrice * newProduct.quantity;
-      const remainingAmount = totalPrice - newProduct.paidAmount;
+      const totalPrice = Math.round(newProduct.unitPrice * newProduct.quantity);
+      const paidAmount = Math.round(newProduct.paidAmount || 0);
+      const remainingAmount = Math.round(totalPrice - paidAmount);
 
-      await addDoc(collection(db, 'supplierProducts'), {
+      // Add the product
+      const productDoc = await addDoc(collection(db, 'supplierProducts'), {
         ...newProduct,
         supplierId: selectedSupplier.id,
-        totalPrice,
-        remainingAmount,
+        totalPrice: Math.round(totalPrice),
+        paidAmount: Math.round(paidAmount),
+        remainingAmount: Math.round(remainingAmount),
         createdAt: new Date().toISOString()
       });
+
+      // If there's an initial payment, add it to payment history
+      if (paidAmount > 0) {
+        await addDoc(collection(db, 'supplierPayments'), {
+          supplierId: selectedSupplier.id,
+          amount: Math.round(paidAmount),
+          date: new Date().toISOString().split('T')[0],
+          description: `Initial payment for ${newProduct.name}`,
+          paymentMethod: 'Cash',
+          chequeNumber: '',
+          createdAt: new Date().toISOString()
+        });
+      }
 
       // Update supplier balance
       const supplierDoc = doc(db, 'suppliers', selectedSupplier.id);
       await updateDoc(supplierDoc, {
-        balance: selectedSupplier.balance + remainingAmount
+        balance: Math.round(selectedSupplier.balance + remainingAmount)
       });
 
       setShowProductModal(false);
@@ -253,13 +274,13 @@ function SupplierManagement() {
     if (!validatePayment()) return;
 
     try {
-      const paymentAmount = parseFloat(payment.amount);
+      const paymentAmount = Math.round(parseFloat(payment.amount));
       const supplierDoc = doc(db, 'suppliers', selectedSupplier.id);
       
       // Add payment record
       await addDoc(collection(db, 'supplierPayments'), {
         supplierId: selectedSupplier.id,
-        amount: paymentAmount,
+        amount: Math.round(paymentAmount),
         date: payment.date,
         description: payment.description,
         paymentMethod: payment.paymentMethod,
@@ -267,9 +288,19 @@ function SupplierManagement() {
         createdAt: new Date().toISOString()
       });
 
+      // Update product's paid amount and remaining amount
+      const productDoc = doc(db, 'supplierProducts', selectedSupplier.product.id);
+      const newPaidAmount = Math.round((selectedSupplier.product.paidAmount || 0) + paymentAmount);
+      const newRemainingAmount = Math.round(selectedSupplier.product.totalPrice - newPaidAmount);
+      
+      await updateDoc(productDoc, {
+        paidAmount: Math.round(newPaidAmount),
+        remainingAmount: Math.round(newRemainingAmount)
+      });
+
       // Update supplier balance
       await updateDoc(supplierDoc, {
-        balance: selectedSupplier.balance - paymentAmount
+        balance: Math.round(selectedSupplier.balance - paymentAmount)
       });
 
       setShowPaymentModal(false);
@@ -282,6 +313,7 @@ function SupplierManagement() {
       });
       setErrors({});
       fetchSuppliers();
+      fetchSupplierProducts(selectedSupplier.id);
     } catch (error) {
       console.error('Error adding payment:', error);
       alert('Error adding payment. Please check console for details.');
@@ -362,18 +394,6 @@ function SupplierManagement() {
                   >
                     <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-                    </svg>
-                  </button>
-                  <button
-                    onClick={() => {
-                      setSelectedSupplier(supplier);
-                      setShowPaymentModal(true);
-                    }}
-                    className="text-green-600 hover:text-green-800"
-                    title="Add Payment"
-                  >
-                    <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
                   </button>
                 </td>
@@ -501,9 +521,8 @@ function SupplierManagement() {
 
             {/* Add New Product Form */}
             {showNewProductForm && (
-              <div className="mt-6 p-4 border rounded-lg">
-                <h4 className="text-lg font-semibold mb-4">Add New Product</h4>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="bg-gray-50 p-4 rounded-lg mb-6">
+                <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-700">Product Name</label>
                     <input
@@ -529,11 +548,13 @@ function SupplierManagement() {
                       type="number"
                       value={newProduct.unitPrice}
                       onChange={(e) => {
-                        const value = parseFloat(e.target.value);
+                        const value = Math.round(parseFloat(e.target.value) || 0);
+                        const totalPrice = Math.round(value * newProduct.quantity);
                         setNewProduct({
                           ...newProduct,
                           unitPrice: value,
-                          totalPrice: value * newProduct.quantity
+                          totalPrice: totalPrice,
+                          remainingAmount: Math.round(totalPrice - newProduct.paidAmount)
                         });
                         if (errors.unitPrice) {
                           setErrors(prev => ({ ...prev, unitPrice: '' }));
@@ -555,11 +576,13 @@ function SupplierManagement() {
                       type="number"
                       value={newProduct.quantity}
                       onChange={(e) => {
-                        const value = parseInt(e.target.value);
+                        const value = Math.round(parseFloat(e.target.value) || 0);
+                        const totalPrice = Math.round(newProduct.unitPrice * value);
                         setNewProduct({
                           ...newProduct,
                           quantity: value,
-                          totalPrice: value * newProduct.unitPrice
+                          totalPrice: totalPrice,
+                          remainingAmount: Math.round(totalPrice - newProduct.paidAmount)
                         });
                         if (errors.quantity) {
                           setErrors(prev => ({ ...prev, quantity: '' }));
@@ -581,11 +604,12 @@ function SupplierManagement() {
                       type="number"
                       value={newProduct.paidAmount}
                       onChange={(e) => {
-                        const value = parseFloat(e.target.value);
+                        const value = Math.round(parseFloat(e.target.value) || 0);
+                        const totalPrice = Math.round(newProduct.unitPrice * newProduct.quantity);
                         setNewProduct({
                           ...newProduct,
                           paidAmount: value,
-                          remainingAmount: (newProduct.unitPrice * newProduct.quantity) - value
+                          remainingAmount: Math.round(totalPrice - value)
                         });
                         if (errors.paidAmount) {
                           setErrors(prev => ({ ...prev, paidAmount: '' }));
@@ -684,9 +708,11 @@ function SupplierManagement() {
                           onClick={() => {
                             setSelectedSupplier({ ...selectedSupplier, product });
                             setPayment({
-                              amount: product.remainingAmount || 0,
+                              amount: Math.round(product.remainingAmount || 0),
                               date: new Date().toISOString().split('T')[0],
-                              description: `Payment for ${product.name || 'product'}`
+                              description: `Payment for ${product.name || 'product'}`,
+                              paymentMethod: 'Cash',
+                              chequeNumber: ''
                             });
                             setShowPaymentModal(true);
                           }}

@@ -274,7 +274,7 @@ function InventoryForm() {
                 className="w-full px-4 py-2 border border-gray-300 rounded-md shadow-sm focus:ring focus:ring-blue-200"
               />
             </div>
-            <p className="text-lg font-semibold">Total Inventory Value: Rs {totalInventoryValue.toFixed(2)}</p>
+            <p className="text-lg font-semibold">Total Inventory Value: Rs {Math.round(totalInventoryValue)}</p>
           </div>
         </div>
 
