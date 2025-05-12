@@ -140,7 +140,7 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
 
   const handlePayRemaining = (sale) => {
     setSelectedSale(sale);
-    setPaymentAmount(sale.remainingAmount?.toString() || '0');
+    setPaymentAmount(Math.round(sale.remainingAmount || 0).toString());
     setShowPaymentModal(true);
   };
 
@@ -202,11 +202,13 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
 
   const handlePaymentSubmit = async () => {
     const newErrors = {};
+    const amount = Math.round(parseFloat(paymentAmount));
+    const remainingAmount = Math.round(selectedSale.remainingAmount);
     
-    if (!paymentAmount || parseFloat(paymentAmount) <= 0) {
+    if (!paymentAmount || amount <= 0) {
       newErrors.amount = 'Please enter a valid payment amount';
-    } else if (parseFloat(paymentAmount) > selectedSale.remainingAmount) {
-      newErrors.amount = `Payment amount cannot exceed remaining amount (Rs ${selectedSale.remainingAmount.toFixed(2)})`;
+    } else if (amount > remainingAmount) {
+      newErrors.amount = `Payment amount cannot exceed remaining amount (Rs ${Math.round(remainingAmount)})`;
     }
 
     if (paymentMethod === 'Cheque' && !chequeNumber.trim()) {
@@ -225,7 +227,7 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
     try {
       const paymentData = {
         saleId: selectedSale.id,
-        amount: parseFloat(paymentAmount),
+        amount: Math.round(amount),
         paymentMethod,
         comment: paymentMethod === 'Other' ? paymentComment : '',
         chequeNumber: paymentMethod === 'Cheque' ? chequeNumber : '',
@@ -236,7 +238,7 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
       await addDoc(collection(db, 'paymentHistory'), paymentData);
       
       // Calculate new remaining amount
-      const newRemainingAmount = (selectedSale.remainingAmount || 0) - parseFloat(paymentAmount);
+      const newRemainingAmount = Math.round(remainingAmount - amount);
       const saleDoc = doc(db, 'receipts', selectedSale.id);
       
       // Get all payment records to calculate total paid amount
@@ -247,22 +249,22 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
       const paymentHistorySnapshot = await getDocs(paymentHistoryQuery);
       
       // Calculate total paid amount from all payment records
-      const totalPaidAmount = paymentHistorySnapshot.docs.reduce((sum, doc) => 
-        sum + (doc.data().amount || 0), 0
-      );
+      const totalPaidAmount = Math.round(paymentHistorySnapshot.docs.reduce((sum, doc) => 
+        sum + (Math.round(doc.data().amount) || 0), 0
+      ));
       
       if (newRemainingAmount <= 0) {
         // If fully paid, update the sale document
         await updateDoc(saleDoc, {
           remainingAmount: 0,
           isDebt: false,
-          paidAmount: totalPaidAmount
+          paidAmount: Math.round(totalPaidAmount)
         });
       } else {
         // Update remaining amount and total paid amount
         await updateDoc(saleDoc, {
-          remainingAmount: newRemainingAmount,
-          paidAmount: totalPaidAmount
+          remainingAmount: Math.round(newRemainingAmount),
+          paidAmount: Math.round(totalPaidAmount)
         });
       }
 
@@ -556,12 +558,15 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
                 <input
                   type="number"
                   value={paymentAmount}
-                  onChange={(e) => setPaymentAmount(e.target.value)}
+                  onChange={(e) => {
+                    const value = e.target.value === '' ? '' : Math.round(parseFloat(e.target.value));
+                    setPaymentAmount(value.toString());
+                  }}
                   className={`mt-1 block w-full border rounded-md shadow-sm p-2 ${
                     paymentErrors.amount ? 'border-red-500' : 'border-gray-300'
                   }`}
                   min="0"
-                  step="0.01"
+                  max={Math.round(selectedSale?.remainingAmount || 0)}
                 />
                 {paymentErrors.amount && (
                   <p className="mt-1 text-sm text-red-600">{paymentErrors.amount}</p>

@@ -1,8 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { collection, addDoc, getDocs, doc, updateDoc, query, where } from 'firebase/firestore';
+import { collection, addDoc } from 'firebase/firestore';
 import { db } from './firebase';
 import { generatePrintableHTML } from './PrintableReceipt';
-
 import { useRef } from 'react';
 
 function ReceiptForm({ isOpen, onClose, onSave }) {
@@ -13,8 +12,7 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
   const [chequeNumber, setChequeNumber] = useState('');
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
-  const [items, setItems] = useState([{ name: '', quantity: 1, costPrice: 0, salesPrice: 0 }]);
-  const [inventoryProducts, setInventoryProducts] = useState([]);
+  const [items, setItems] = useState([{ name: '', quantity: 1, price: 0 }]);
   const [errors, setErrors] = useState({});
   const [discount, setDiscount] = useState(0);
   const [showDiscount, setShowDiscount] = useState(false);
@@ -22,26 +20,20 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
   const [isPartialPayment, setIsPartialPayment] = useState(false);
   const [paymentHistory, setPaymentHistory] = useState([]);
 
-  useEffect(() => {
-    if (isOpen) {
-      fetchInventoryProducts();
-    }
-  }, [isOpen]);
-
-  const fetchInventoryProducts = async () => {
-    try {
-      const productsCollection = collection(db, 'products');
-      const querySnapshot = await getDocs(productsCollection);
-      const productsList = querySnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-      setInventoryProducts(productsList);
-    } catch (error) {
-      console.error('Error fetching products:', error);
-      alert('Error fetching products. Please check console for details.');
-    }
+  const calculateTotal = () => {
+    const subtotal = items.reduce((sum, item) => sum + (item.quantity * item.price), 0);
+    const discountAmount = (subtotal * discount) / 100;
+    const total = subtotal - discountAmount;
+    const remainingAmount = total - paidAmount;
+    return {
+      subtotal,
+      discountAmount,
+      total,
+      remainingAmount
+    };
   };
+
+  const { subtotal, discountAmount, total, remainingAmount } = calculateTotal();
 
   useEffect(() => {
     if (showPrint && !hasPrintedRef.current) {
@@ -55,7 +47,6 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
   }, [showPrint]);
 
   const handlePrint = () => {
-    const { subtotal, discountAmount, total } = calculateTotal();
     const initialPayment = isPartialPayment ? paidAmount : total;
     
     // Create initial payment record for printing
@@ -74,7 +65,7 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
       items: items.map(item => ({
         name: item.name,
         quantity: item.quantity,
-        price: item.salesPrice
+        price: item.price
       })),
       totalAmount: total,
       date: new Date().toISOString(),
@@ -87,7 +78,7 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
       paidAmount: initialPayment,
       remainingAmount: isPartialPayment ? (total - paidAmount) : 0,
       isCustomerReport: false,
-      paymentHistory: [initialPaymentRecord] // Only show the initial payment
+      paymentHistory: [initialPaymentRecord]
     });
   
     const printWindow = window.open('', '_blank', 'width=800,height=600');
@@ -105,71 +96,31 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
   const handleItemChange = (index, field, value) => {
     const newItems = [...items];
     if (field === 'name') {
-      const selectedProduct = inventoryProducts.find(p => p.name === value);
       newItems[index] = {
         ...newItems[index],
-        name: value,
-        costPrice: selectedProduct ? selectedProduct.unitPrice : 0,
-        salesPrice: selectedProduct ? selectedProduct.unitPrice : 0,
-        availableQuantity: selectedProduct ? selectedProduct.quantity : 0
+        name: value
       };
-      setErrors(prev => {
-        const newErrors = { ...prev };
-        delete newErrors[`itemQuantity${index}`];
-        return newErrors;
-      });
     } else if (field === 'quantity') {
-      const selectedProduct = inventoryProducts.find(p => p.name === newItems[index].name);
-      const availableQuantity = selectedProduct ? selectedProduct.quantity : 0;
-      
-      setErrors(prev => {
-        const newErrors = { ...prev };
-        delete newErrors[`itemQuantity${index}`];
-        return newErrors;
-      });
-
-      if (value > availableQuantity) {
-        setErrors(prev => ({
-          ...prev,
-          [`itemQuantity${index}`]: `Only ${availableQuantity} units available in stock`
-        }));
-        return;
-      }
       newItems[index] = {
         ...newItems[index],
         quantity: value,
-        totalPrice: value * newItems[index].salesPrice
+        totalPrice: value * newItems[index].price
       };
-    } else if (field === 'salesPrice') {
+    } else if (field === 'price') {
+      // Only allow integer values for price
+      const intValue = Math.round(parseFloat(value) || 0);
       newItems[index] = {
         ...newItems[index],
-        salesPrice: value,
-        totalPrice: value * newItems[index].quantity
+        price: intValue,
+        totalPrice: intValue * newItems[index].quantity
       };
     }
     setItems(newItems);
   };
 
   const addItem = () => {
-    setItems([...items, { name: '', quantity: 1, costPrice: 0, salesPrice: 0 }]);
+    setItems([...items, { name: '', quantity: 1, price: 0 }]);
   };
-
-  const calculateTotal = () => {
-    const subtotal = items.reduce((sum, item) => sum + (item.quantity * item.salesPrice), 0);
-    const costTotal = items.reduce((sum, item) => sum + (item.quantity * item.costPrice), 0);
-    const discountAmount = (subtotal * discount) / 100;
-    const total = subtotal - discountAmount;
-    const remainingAmount = total - paidAmount;
-    return {
-      subtotal,
-      costTotal,
-      discountAmount,
-      total,
-      remainingAmount
-    };
-  };
-
-  const { subtotal, costTotal, discountAmount, total, remainingAmount } = calculateTotal();
 
   const validateForm = () => {
     const newErrors = {};
@@ -197,9 +148,8 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
       if (!item.quantity || item.quantity <= 0) {
         newErrors[`itemQuantity${index}`] = 'Quantity must be greater than 0';
       }
-      const selectedProduct = inventoryProducts.find(p => p.name === item.name);
-      if (selectedProduct && item.quantity > selectedProduct.quantity) {
-        newErrors[`itemQuantity${index}`] = `Only ${selectedProduct.quantity} units available in stock`;
+      if (!item.price || item.price < 0) {
+        newErrors[`itemPrice${index}`] = 'Price must be greater than or equal to 0';
       }
     });
     
@@ -216,56 +166,11 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
         newErrors.paidAmount = 'Paid amount must be a valid number';
       } else if (paidAmount > total) {
         newErrors.paidAmount = 'Paid amount cannot be greater than total amount';
-      } else if (paidAmount === 0) {
-        newErrors.paidAmount = 'Paid amount must be greater than 0';
       }
     }
     
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
-  };
-
-  const updateInventoryQuantities = async (items) => {
-    try {
-      const productsCollection = collection(db, 'products');
-      const updates = [];
-      
-      for (const item of items) {
-        // Find the product in inventory
-        const productQuery = query(productsCollection, where('name', '==', item.name));
-        const querySnapshot = await getDocs(productQuery);
-        
-        if (querySnapshot.empty) {
-          throw new Error(`Product "${item.name}" not found in inventory`);
-        }
-
-        const productDoc = querySnapshot.docs[0];
-        const currentData = productDoc.data();
-        
-        if (currentData.quantity < item.quantity) {
-          throw new Error(`Insufficient stock for "${item.name}". Available: ${currentData.quantity}, Requested: ${item.quantity}`);
-        }
-
-        const newQuantity = currentData.quantity - item.quantity;
-        const newTotalValue = newQuantity * currentData.unitPrice;
-        
-        updates.push({
-          docRef: doc(db, 'products', productDoc.id),
-          data: {
-            quantity: newQuantity,
-            totalValue: newTotalValue
-          }
-        });
-      }
-
-      // Perform all updates in a batch
-      for (const update of updates) {
-        await updateDoc(update.docRef, update.data);
-      }
-    } catch (error) {
-      console.error('Error updating inventory:', error);
-      throw error;
-    }
   };
 
   const handleSave = async () => {
@@ -274,7 +179,6 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
     }
 
     try {
-      const { subtotal, discountAmount, total } = calculateTotal();
       const initialPayment = isPartialPayment ? paidAmount : total;
       
       // Create the receipt data
@@ -284,9 +188,8 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
         items: items.map(item => ({
           name: item.name,
           quantity: item.quantity,
-          costPrice: item.costPrice,
-          salesPrice: item.salesPrice,
-          totalPrice: item.quantity * item.salesPrice
+          price: item.price,
+          totalPrice: item.quantity * item.price
         })),
         totalAmount: total,
         paidAmount: initialPayment,
@@ -304,24 +207,22 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
       // Add the receipt to Firestore
       const docRef = await addDoc(collection(db, 'receipts'), receiptData);
 
-      // Update inventory quantities
-      await updateInventoryQuantities(items);
+      // Create initial payment record only if there is a payment
+      if (initialPayment > 0) {
+        const paymentHistoryData = {
+          saleId: docRef.id,
+          amount: initialPayment,
+          paymentMethod: paymentMethod,
+          date: new Date().toISOString(),
+          chequeNumber: paymentMethod === 'Cheque' ? chequeNumber : '',
+          comment: paymentMethod === 'Other' ? comment : '',
+          type: 'Initial Payment'
+        };
+        
+        // Add the initial payment to payment history
+        await addDoc(collection(db, 'paymentHistory'), paymentHistoryData);
+      }
 
-      // Create initial payment record
-      const paymentHistoryData = {
-        saleId: docRef.id,
-        amount: initialPayment,
-        paymentMethod: paymentMethod,
-        date: new Date().toISOString(),
-        chequeNumber: paymentMethod === 'Cheque' ? chequeNumber : '',
-        comment: paymentMethod === 'Other' ? comment : '',
-        type: 'Initial Payment'
-      };
-      
-      // Add the initial payment to payment history
-      await addDoc(collection(db, 'paymentHistory'), paymentHistoryData);
-
-      // Remove automatic printing
       resetForm();
       onSave();
     } catch (error) {
@@ -336,7 +237,7 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
     setChequeNumber('');
     setCustomerName('');
     setCustomerPhone('');
-    setItems([{ name: '', quantity: 1, costPrice: 0, salesPrice: 0 }]);
+    setItems([{ name: '', quantity: 1, price: 0 }]);
     setErrors({});
     setDiscount(0);
     setShowDiscount(false);
@@ -415,31 +316,25 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
 
         <div className="flex-1 px-6">
           <div className="space-y-4 py-6">
-            <div className="grid grid-cols-1 sm:grid-cols-5 gap-3 font-medium text-gray-700">
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 font-medium text-gray-700">
               <div className="px-3 py-2">Product Name</div>
               <div className="px-3 py-2">Quantity</div>
-              <div className="px-3 py-2">Cost Price</div>
-              <div className="px-3 py-2">Sales Price</div>
-              <div className="px-3 py-2">Total</div>
+              <div className="px-3 py-2">Price (PKR)</div>
+              <div className="px-3 py-2">Total (PKR)</div>
               <div className="px-3 py-2">Actions</div>
             </div>
             {items.map((item, idx) => (
-              <div key={idx} className="grid grid-cols-1 sm:grid-cols-5 gap-3">
+              <div key={idx} className="grid grid-cols-1 sm:grid-cols-4 gap-3">
                 <div>
-                  <select
+                  <input
+                    type="text"
                     value={item.name}
                     onChange={(e) => handleItemChange(idx, 'name', e.target.value)}
+                    placeholder="Enter product name"
                     className={`w-full px-3 py-2 border rounded-md shadow-sm ${
                       errors[`itemName${idx}`] ? 'border-red-500' : 'border-gray-300'
                     }`}
-                  >
-                    <option value="">Select Product</option>
-                    {inventoryProducts.map((product) => (
-                      <option key={product.id} value={product.name}>
-                        {product.name} (Available: {product.quantity})
-                      </option>
-                    ))}
-                  </select>
+                  />
                   {errors[`itemName${idx}`] && (
                     <p className="mt-1 text-sm text-red-600">{errors[`itemName${idx}`]}</p>
                   )}
@@ -447,12 +342,9 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
                 <div>
                   <input
                     type="number"
+                    value={item.quantity}
+                    onChange={(e) => handleItemChange(idx, 'quantity', parseInt(e.target.value) || 0)}
                     placeholder="Quantity"
-                    value={item.quantity || ''}
-                    onChange={(e) => {
-                      const value = parseInt(e.target.value) || '';
-                      if (value === '' || value > 0) handleItemChange(idx, 'quantity', value);
-                    }}
                     className={`w-full px-3 py-2 border rounded-md shadow-sm ${
                       errors[`itemQuantity${idx}`] ? 'border-red-500' : 'border-gray-300'
                     }`}
@@ -463,25 +355,24 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
                   )}
                 </div>
                 <div>
-                  <div className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm bg-gray-50">
-                    <div className="text-gray-700">Rs {Math.round(item.costPrice)}</div>
-                  </div>
-                </div>
-                <div>
                   <input
                     type="number"
-                    value={item.salesPrice}
-                    onChange={(e) => {
-                      const value = Math.round(parseFloat(e.target.value) || 0);
-                      handleItemChange(idx, 'salesPrice', value);
-                    }}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm"
+                    value={item.price}
+                    onChange={(e) => handleItemChange(idx, 'price', parseFloat(e.target.value) || 0)}
+                    placeholder="Price"
+                    className={`w-full px-3 py-2 border rounded-md shadow-sm ${
+                      errors[`itemPrice${idx}`] ? 'border-red-500' : 'border-gray-300'
+                    }`}
                     min="0"
+                    step="0.01"
                   />
+                  {errors[`itemPrice${idx}`] && (
+                    <p className="mt-1 text-sm text-red-600">{errors[`itemPrice${idx}`]}</p>
+                  )}
                 </div>
                 <div>
                   <div className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm bg-gray-50">
-                    <div className="text-gray-700">Rs {Math.round(item.quantity * item.salesPrice)}</div>
+                    <div className="text-gray-700">Rs {Math.round(item.quantity * item.price)}</div>
                   </div>
                 </div>
                 <div className="flex items-center">
@@ -577,9 +468,10 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
                 <label className="block text-sm font-medium text-gray-700 mb-1">Paid Amount</label>
                 <input
                   type="number"
-                  value={paidAmount === 0 ? '' : paidAmount}
+                  value={paidAmount}
                   onChange={(e) => {
-                    const value = e.target.value === '' ? 0 : parseFloat(e.target.value);
+                    // Only allow integer values for paid amount
+                    const value = e.target.value === '' ? '' : Math.round(parseFloat(e.target.value) || 0);
                     setPaidAmount(value);
                   }}
                   className={`w-full px-4 py-2 border rounded-md shadow-sm ${
@@ -587,7 +479,7 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
                   }`}
                   min="0"
                   max={total}
-                  step="0.01"
+                  step="1"
                 />
                 {errors.paidAmount && (
                   <p className="mt-1 text-sm text-red-600">{errors.paidAmount}</p>
