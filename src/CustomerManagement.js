@@ -28,13 +28,12 @@ function CustomerManagement() {
       // Group sales by customer
       const customerData = {};
       salesList.forEach(sale => {
-        const normalizedName = sale.customerName.toLowerCase();
-        const customerKey = `${normalizedName}-${sale.customerPhone}`;
+        const customerKey = sale.customerPhone;
         
         if (!customerData[customerKey]) {
-          // Find if there's an existing customer with the same normalized name
+          // Find if there's an existing customer with the same phone number
           const existingKey = Object.keys(customerData).find(key => 
-            key.toLowerCase() === customerKey.toLowerCase()
+            key === customerKey
           );
           
           if (existingKey) {

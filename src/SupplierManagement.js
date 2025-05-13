@@ -220,6 +220,7 @@ function SupplierManagement() {
       const totalPrice = Math.round(newProduct.unitPrice * newProduct.quantity);
       const paidAmount = Math.round(newProduct.paidAmount || 0);
       const remainingAmount = Math.round(totalPrice - paidAmount);
+      const currentDate = new Date().toISOString();
 
       // Add the product
       const productDoc = await addDoc(collection(db, 'supplierProducts'), {
@@ -228,7 +229,13 @@ function SupplierManagement() {
         totalPrice: Math.round(totalPrice),
         paidAmount: Math.round(paidAmount),
         remainingAmount: Math.round(remainingAmount),
-        createdAt: new Date().toISOString()
+        createdAt: currentDate,
+        purchases: [{
+          date: currentDate,
+          quantity: newProduct.quantity,
+          unitPrice: newProduct.unitPrice,
+          totalValue: totalPrice
+        }]
       });
 
       // If there's an initial payment, add it to payment history
@@ -236,11 +243,11 @@ function SupplierManagement() {
         await addDoc(collection(db, 'supplierPayments'), {
           supplierId: selectedSupplier.id,
           amount: Math.round(paidAmount),
-          date: new Date().toISOString().split('T')[0],
+          date: currentDate.split('T')[0],
           description: `Initial payment for ${newProduct.name}`,
           paymentMethod: 'Cash',
           chequeNumber: '',
-          createdAt: new Date().toISOString()
+          createdAt: currentDate
         });
       }
 
