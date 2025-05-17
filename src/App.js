@@ -26,6 +26,7 @@ function App() {
     setShowReceiptForm(true);
   };
 
+
   const handleCloseReceiptForm = () => {
     setShowReceiptForm(false);
   };
