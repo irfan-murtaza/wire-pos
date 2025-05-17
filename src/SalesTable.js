@@ -138,12 +138,6 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
     }
   };
 
-  const handlePayRemaining = (sale) => {
-    setSelectedSale(sale);
-    setPaymentAmount(Math.round(sale.remainingAmount || 0).toString());
-    setShowPaymentModal(true);
-  };
-
   const handleViewDetails = async (sale) => {
     setSelectedSale(sale);
     console.log('Selected Sale Items:', sale.items);
@@ -197,87 +191,6 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
       });
       setPaymentHistory([]);
       setShowPaymentHistory(true);
-    }
-  };
-
-  const handlePaymentSubmit = async () => {
-    const newErrors = {};
-    const amount = Math.round(parseFloat(paymentAmount));
-    const remainingAmount = Math.round(selectedSale.remainingAmount);
-    
-    if (!paymentAmount || amount <= 0) {
-      newErrors.amount = 'Please enter a valid payment amount';
-    } else if (amount > remainingAmount) {
-      newErrors.amount = `Payment amount cannot exceed remaining amount (Rs ${Math.round(remainingAmount)})`;
-    }
-
-    if (paymentMethod === 'Cheque' && !chequeNumber.trim()) {
-      newErrors.chequeNumber = 'Cheque number is required';
-    }
-
-    if (paymentMethod === 'Other' && !paymentComment.trim()) {
-      newErrors.comment = 'Comment is required for "Other" payment method';
-    }
-
-    setPaymentErrors(newErrors);
-    if (Object.keys(newErrors).length > 0) {
-      return;
-    }
-
-    try {
-      const paymentData = {
-        saleId: selectedSale.id,
-        amount: Math.round(amount),
-        paymentMethod,
-        comment: paymentMethod === 'Other' ? paymentComment : '',
-        chequeNumber: paymentMethod === 'Cheque' ? chequeNumber : '',
-        date: new Date().toISOString(),
-        type: 'Additional Payment'
-      };
-
-      await addDoc(collection(db, 'paymentHistory'), paymentData);
-      
-      // Calculate new remaining amount
-      const newRemainingAmount = Math.round(remainingAmount - amount);
-      const saleDoc = doc(db, 'receipts', selectedSale.id);
-      
-      // Get all payment records to calculate total paid amount
-      const paymentHistoryQuery = query(
-        collection(db, 'paymentHistory'),
-        where('saleId', '==', selectedSale.id)
-      );
-      const paymentHistorySnapshot = await getDocs(paymentHistoryQuery);
-      
-      // Calculate total paid amount from all payment records
-      const totalPaidAmount = Math.round(paymentHistorySnapshot.docs.reduce((sum, doc) => 
-        sum + (Math.round(doc.data().amount) || 0), 0
-      ));
-      
-      if (newRemainingAmount <= 0) {
-        // If fully paid, update the sale document
-        await updateDoc(saleDoc, {
-          remainingAmount: 0,
-          isDebt: false,
-          paidAmount: Math.round(totalPaidAmount)
-        });
-      } else {
-        // Update remaining amount and total paid amount
-        await updateDoc(saleDoc, {
-          remainingAmount: Math.round(newRemainingAmount),
-          paidAmount: Math.round(totalPaidAmount)
-        });
-      }
-
-      setShowPaymentModal(false);
-      setPaymentAmount('');
-      setPaymentMethod('Cash');
-      setPaymentComment('');
-      setChequeNumber('');
-      setPaymentErrors({});
-      fetchSales(); // Refresh the sales data
-    } catch (error) {
-      console.error('Error saving payment:', error);
-      alert(`Error saving payment: ${error.message}`);
     }
   };
 
@@ -339,9 +252,6 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
         customerInfo,
         paymentInfo,
         Math.round(sale.totalAmount),
-        Math.round(sale.paidAmount || 0),
-        Math.round(sale.remainingAmount || 0),
-        discountText,
         itemsText
       ];
     });
@@ -349,7 +259,7 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
     // Add main table
     autoTable(doc, {
       startY: yPos + 30,
-      head: [['Date', 'Customer', 'Payment', 'Total', 'Paid', 'Remaining', 'Discount', 'Items (Qty: Unit Price in PKR)']],
+      head: [['Date', 'Customer', 'Payment', 'Total', 'Items (Qty: Unit Price in PKR)']],
       body: tableData,
       theme: 'grid',
       headStyles: { fillColor: [41, 128, 185] },
@@ -359,10 +269,7 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
         1: { cellWidth: 30 },
         2: { cellWidth: 20 },
         3: { cellWidth: 15 },
-        4: { cellWidth: 15 },
-        5: { cellWidth: 15 },
-        6: { cellWidth: 20 },
-        7: { cellWidth: 40, cellPadding: 2 }
+        4: { cellWidth: 40, cellPadding: 2 }
       }
     });
 
@@ -478,14 +385,12 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
               <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Customer</th>
               <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Payment</th>
               <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Total (PKR)</th>
-              <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Paid (PKR)</th>
-              <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Remaining (PKR)</th>
               <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Actions</th>
             </tr>
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
             {filteredSales.map((sale) => (
-              <tr key={sale.id} className={`hover:bg-gray-50 ${sale.isDebt ? 'bg-red-50' : ''}`}>
+              <tr key={sale.id} className="hover:bg-gray-50">
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-center">
                   {formatDate(sale.date)}
                 </td>
@@ -503,12 +408,6 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
                     </span>
                   )}
                 </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-center">
-                  {Math.round(sale.paidAmount || 0)}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-red-600 text-center">
-                  {sale.remainingAmount > 0 ? Math.round(sale.remainingAmount) : '-'}
-                </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-center space-x-2">
                   <button
                     onClick={() => handlePrint(sale)}
@@ -519,17 +418,6 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
                     </svg>
                   </button>
-                  {sale.remainingAmount > 0 && (
-                    <button
-                      onClick={() => handlePayRemaining(sale)}
-                      className="text-green-600 hover:text-green-800 ml-2"
-                      title="Pay Remaining"
-                    >
-                      <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                      </svg>
-                    </button>
-                  )}
                   <button
                     onClick={() => handleViewDetails(sale)}
                     className="text-purple-600 hover:text-purple-800 ml-2"
@@ -546,107 +434,6 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
           </tbody>
         </table>
       </div>
-
-      {/* Payment Modal */}
-      {showPaymentModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
-            <h3 className="text-lg font-semibold mb-4">Add Payment</h3>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Amount</label>
-                <input
-                  type="number"
-                  value={paymentAmount}
-                  onChange={(e) => {
-                    const value = e.target.value === '' ? '' : Math.round(parseFloat(e.target.value));
-                    setPaymentAmount(value.toString());
-                  }}
-                  className={`mt-1 block w-full border rounded-md shadow-sm p-2 ${
-                    paymentErrors.amount ? 'border-red-500' : 'border-gray-300'
-                  }`}
-                  min="0"
-                  max={Math.round(selectedSale?.remainingAmount || 0)}
-                />
-                {paymentErrors.amount && (
-                  <p className="mt-1 text-sm text-red-600">{paymentErrors.amount}</p>
-                )}
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Payment Method</label>
-                <select
-                  value={paymentMethod}
-                  onChange={(e) => {
-                    setPaymentMethod(e.target.value);
-                    setPaymentErrors({});
-                  }}
-                  className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2"
-                >
-                  <option value="Cash">Cash</option>
-                  <option value="Card">Card</option>
-                  <option value="Cheque">Cheque</option>
-                  <option value="Other">Other</option>
-                </select>
-              </div>
-              {paymentMethod === 'Cheque' && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">Cheque Number</label>
-                  <input
-                    type="text"
-                    value={chequeNumber}
-                    onChange={(e) => setChequeNumber(e.target.value)}
-                    className={`mt-1 block w-full border rounded-md shadow-sm p-2 ${
-                      paymentErrors.chequeNumber ? 'border-red-500' : 'border-gray-300'
-                    }`}
-                    placeholder="Enter cheque number"
-                  />
-                  {paymentErrors.chequeNumber && (
-                    <p className="mt-1 text-sm text-red-600">{paymentErrors.chequeNumber}</p>
-                  )}
-                </div>
-              )}
-              {paymentMethod === 'Other' && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">Comment</label>
-                  <input
-                    type="text"
-                    value={paymentComment}
-                    onChange={(e) => setPaymentComment(e.target.value)}
-                    className={`mt-1 block w-full border rounded-md shadow-sm p-2 ${
-                      paymentErrors.comment ? 'border-red-500' : 'border-gray-300'
-                    }`}
-                    placeholder="Enter payment details"
-                  />
-                  {paymentErrors.comment && (
-                    <p className="mt-1 text-sm text-red-600">{paymentErrors.comment}</p>
-                  )}
-                </div>
-              )}
-              <div className="flex justify-end space-x-3">
-                <button
-                  onClick={() => {
-                    setShowPaymentModal(false);
-                    setPaymentAmount('');
-                    setPaymentMethod('Cash');
-                    setPaymentComment('');
-                    setChequeNumber('');
-                    setPaymentErrors({});
-                  }}
-                  className="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-gray-700 hover:bg-gray-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handlePaymentSubmit}
-                  className="px-4 py-2 bg-blue-600 text-white rounded-md shadow-sm hover:bg-blue-700"
-                >
-                  Save Payment
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Payment History Modal */}
       {showPaymentHistory && (
@@ -731,20 +518,6 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
                         {Math.round(selectedSale?.totalAmount)}
                       </td>
                     </tr>
-                    <tr>
-                      <td colSpan="3" className="px-3 py-2 text-right text-sm font-medium text-gray-900">Paid Amount:</td>
-                      <td className="px-3 py-2 text-right text-sm font-medium text-gray-900">
-                        {Math.round(selectedSale?.paidAmount || 0)}
-                      </td>
-                    </tr>
-                    {selectedSale?.remainingAmount > 0 && (
-                      <tr>
-                        <td colSpan="3" className="px-3 py-2 text-right text-sm font-medium text-red-600">Remaining Amount:</td>
-                        <td className="px-3 py-2 text-right text-sm font-medium text-red-600">
-                          {Math.round(selectedSale.remainingAmount)}
-                        </td>
-                      </tr>
-                    )}
                   </tfoot>
                 </table>
               </div>
@@ -788,20 +561,6 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
                         </tr>
                       ))}
                     </tbody>
-                    <tfoot className="bg-gray-100">
-                      <tr>
-                        <td colSpan="4" className="px-3 py-2 text-right text-sm font-medium text-gray-900">Total Paid:</td>
-                        <td className="px-3 py-2 text-right text-sm font-medium text-gray-900">
-                          PKR {Math.round(selectedSale?.paidAmount) || '0'}
-                        </td>
-                      </tr>
-                      <tr>
-                        <td colSpan="4" className="px-3 py-2 text-right text-sm font-medium text-red-600">Remaining Amount:</td>
-                        <td className="px-3 py-2 text-right text-sm font-medium text-red-600">
-                          PKR {Math.round(selectedSale?.remainingAmount) || '0'}
-                        </td>
-                      </tr>
-                    </tfoot>
                   </table>
                 )}
               </div>

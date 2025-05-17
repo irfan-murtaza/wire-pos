@@ -254,7 +254,7 @@ function InventoryForm() {
   // Calculate total value used (all products)
   const totalValueUsed = usageHistory.reduce((sum, u) => sum + (u.totalValue || 0), 0);
 
-  // Helper: get all years from products, plus at least the last three years
+  // Helper: get all years from products
   const getAvailableYears = () => {
     const years = new Set();
     products.forEach(p => {
@@ -263,10 +263,6 @@ function InventoryForm() {
         years.add(d.getFullYear());
       }
     });
-    const nowYear = new Date().getFullYear();
-    for (let y = nowYear; y > nowYear - 3; y--) {
-      years.add(y);
-    }
     return Array.from(years).sort((a, b) => b - a); // Descending order
   };
 
@@ -324,33 +320,6 @@ function InventoryForm() {
     }));
   };
 
-  // Filter products and usage by selected month and year
-  const getMonthYearFilteredProducts = () => {
-    return products.filter(p => {
-      if (!p.createdAt) return false;
-      const d = new Date(p.createdAt);
-      return d.getFullYear() === stockYearFilter && d.getMonth() === stockMonthFilter;
-    });
-  };
-
-  const getMonthYearFilteredUsage = () => {
-    return usageHistory.filter(u => {
-      if (!u.date) return false;
-      const d = new Date(u.date);
-      return d.getFullYear() === stockYearFilter && d.getMonth() === stockMonthFilter;
-    });
-  };
-
-  // Filtered usage history for Use Stock tab
-  const getFilteredUsageHistory = () => getMonthYearFilteredUsage();
-
-  // Filtered products for Use Stock form
-  const getFilteredProducts = () => getMonthYearFilteredProducts();
-
-  // Filtered summary values
-  const filteredTotalValueUsed = getMonthYearFilteredUsage().reduce((sum, u) => sum + (u.totalValue || 0), 0);
-  const filteredRemainingStock = getMonthYearFilteredProducts().reduce((sum, product) => sum + (product.quantity * product.unitPrice), 0);
-
   const monthNames = [
     'January', 'February', 'March', 'April', 'May', 'June',
     'July', 'August', 'September', 'October', 'November', 'December'
@@ -372,15 +341,15 @@ function InventoryForm() {
           Stock usage recorded successfully!
         </div>
       )}
-      {/* Summary Section (filtered) */}
+      {/* Summary Section */}
       <div className="bg-white rounded-lg shadow p-6">
         <h3 className="text-lg font-semibold text-gray-800 mb-4">Inventory Summary</h3>
         <div className="flex flex-wrap gap-8 items-center">
           <div className="text-xl font-semibold text-purple-800">
-            Total Value Remaining: {formatCurrency(filteredRemainingStock)}
+            Total Value Remaining: {formatCurrency(dailySummary.remainingStock)}
           </div>
           <div className="text-xl font-semibold text-green-800">
-            Total Value Used: {formatCurrency(filteredTotalValueUsed)}
+            Total Value Used: {formatCurrency(totalValueUsed)}
           </div>
         </div>
       </div>
@@ -436,6 +405,26 @@ function InventoryForm() {
                   <option key={y} value={y}>{y}</option>
                 ))}
               </select>
+              <select
+                value={dateFilter}
+                onChange={handleDateFilterChange}
+                className="px-4 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+              >
+                <option value="all">All Time</option>
+                <option value="today">Today</option>
+                <option value="yesterday">Yesterday</option>
+                <option value="thisWeek">This Week</option>
+                <option value="thisMonth">This Month</option>
+                <option value="custom">Custom Date</option>
+              </select>
+              {dateFilter === 'custom' && (
+                <input
+                  type="date"
+                  value={selectedDate}
+                  onChange={handleCustomDateChange}
+                  className="px-4 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                />
+              )}
               <input
                 type="text"
                 placeholder="Search products..."
@@ -508,7 +497,7 @@ function InventoryForm() {
       )}
       {activeTab === 'use' && (
         <div className="space-y-6">
-          {/* Use Stock Form (filtered products) */}
+          {/* Use Stock Form (reuse modal or inline form) */}
           <div className="bg-white rounded-lg shadow p-6">
             <h3 className="text-lg font-semibold mb-4">Use Stock</h3>
             <form onSubmit={handleUseSubmit} className="flex flex-wrap gap-4 items-end">
@@ -517,14 +506,14 @@ function InventoryForm() {
                 <select
                   value={selectedProduct ? selectedProduct.id : ''}
                   onChange={e => {
-                    const prod = getFilteredProducts().find(p => p.id === e.target.value);
+                    const prod = products.find(p => p.id === e.target.value);
                     setSelectedProduct(prod || null);
                   }}
                   className="px-4 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
                   required
                 >
                   <option value="">Select product</option>
-                  {getFilteredProducts().map(p => (
+                  {products.map(p => (
                     <option key={p.id} value={p.id}>{p.name}</option>
                   ))}
                 </select>
@@ -574,7 +563,7 @@ function InventoryForm() {
             </form>
           </div>
 
-          {/* Per-product summary (filtered) */}
+          {/* Per-product summary */}
           <div className="bg-white rounded-lg shadow p-6 mt-6">
             <h4 className="text-md font-semibold mb-2">Per Product Usage Summary</h4>
             <table className="min-w-full divide-y divide-gray-200">
@@ -597,7 +586,7 @@ function InventoryForm() {
             </table>
           </div>
 
-          {/* Usage History Table (filtered) */}
+          {/* Usage History Table (now below per-product summary) */}
           <div className="bg-white rounded-lg shadow overflow-hidden mt-6">
             <div className="p-4 font-semibold text-lg">Usage History</div>
             <table className="min-w-full divide-y divide-gray-200">
@@ -611,7 +600,7 @@ function InventoryForm() {
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {getFilteredUsageHistory().map((u, idx) => (
+                {usageHistory.map((u, idx) => (
                   <tr key={u.id || idx} className="hover:bg-gray-50">
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{u.productName}</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-right">{u.quantity}</td>

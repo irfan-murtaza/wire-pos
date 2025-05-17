@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { collection, getDocs, query, orderBy, where } from 'firebase/firestore';
+import { collection, getDocs, query, orderBy, where, addDoc, doc, updateDoc } from 'firebase/firestore';
 import { db } from './firebase';
 import { generatePrintableHTML } from './PrintableReceipt';
 
@@ -11,6 +11,14 @@ function CustomerManagement() {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedSale, setSelectedSale] = useState(null);
   const [showSaleDetails, setShowSaleDetails] = useState(false);
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [paymentCustomer, setPaymentCustomer] = useState(null);
+  const [paymentAmount, setPaymentAmount] = useState('');
+  const [paymentMethod, setPaymentMethod] = useState('Cash');
+  const [paymentDate, setPaymentDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [paymentComment, setPaymentComment] = useState('');
+  const [chequeNumber, setChequeNumber] = useState('');
+  const [paymentErrors, setPaymentErrors] = useState({});
 
   useEffect(() => {
     fetchCustomerData();
@@ -29,63 +37,34 @@ function CustomerManagement() {
       const customerData = {};
       salesList.forEach(sale => {
         const customerKey = sale.customerPhone;
-        
+        const cleanName = sale.customerName ? sale.customerName.trim() : '';
         if (!customerData[customerKey]) {
-          // Find if there's an existing customer with the same phone number
-          const existingKey = Object.keys(customerData).find(key => 
-            key === customerKey
-          );
-          
-          if (existingKey) {
-            // Merge with existing customer data
-            customerData[existingKey].totalAmount += sale.totalAmount || 0;
-            customerData[existingKey].paidAmount += sale.paidAmount || 0;
-            customerData[existingKey].remainingAmount += sale.remainingAmount || 0;
-            customerData[existingKey].sales.push(sale);
-            
-            // Merge items
-            sale.items.forEach(item => {
-              const itemKey = item.name;
-              if (!customerData[existingKey].items[itemKey]) {
-                customerData[existingKey].items[itemKey] = {
-                  name: item.name,
-                  totalQuantity: 0,
-                  totalValue: 0
-                };
-              }
-              customerData[existingKey].items[itemKey].totalQuantity += item.quantity || 0;
-              customerData[existingKey].items[itemKey].totalValue += (item.quantity || 0) * (item.price || 0);
-            });
-          } else {
-            // Create new customer entry
-            customerData[customerKey] = {
-              name: sale.customerName,
-              phone: sale.customerPhone,
-              totalAmount: sale.totalAmount || 0,
-              paidAmount: sale.paidAmount || 0,
-              remainingAmount: sale.remainingAmount || 0,
-              sales: [sale],
-              items: {}
+          customerData[customerKey] = {
+            names: cleanName ? [cleanName] : [],
+            phone: sale.customerPhone,
+            totalAmount: sale.totalAmount || 0,
+            paidAmount: sale.paidAmount || 0,
+            remainingAmount: sale.remainingAmount || 0,
+            sales: [sale],
+            items: {}
+          };
+          sale.items.forEach(item => {
+            const itemKey = item.name;
+            customerData[customerKey].items[itemKey] = {
+              name: item.name,
+              totalQuantity: item.quantity || 0,
+              totalValue: (item.quantity || 0) * (item.price || 0)
             };
-            
-            // Initialize items
-            sale.items.forEach(item => {
-              const itemKey = item.name;
-              customerData[customerKey].items[itemKey] = {
-                name: item.name,
-                totalQuantity: item.quantity || 0,
-                totalValue: (item.quantity || 0) * (item.price || 0)
-              };
-            });
-          }
+          });
         } else {
-          // Update existing customer data
+          // Add name if not already present (case-insensitive, trimmed)
+          if (cleanName && !customerData[customerKey].names.some(n => n.trim().toLowerCase() === cleanName.toLowerCase())) {
+            customerData[customerKey].names.push(cleanName);
+          }
           customerData[customerKey].totalAmount += sale.totalAmount || 0;
           customerData[customerKey].paidAmount += sale.paidAmount || 0;
           customerData[customerKey].remainingAmount += sale.remainingAmount || 0;
           customerData[customerKey].sales.push(sale);
-          
-          // Update items
           sale.items.forEach(item => {
             const itemKey = item.name;
             if (!customerData[customerKey].items[itemKey]) {
@@ -156,6 +135,92 @@ function CustomerManagement() {
     setShowSaleDetails(true);
   };
 
+  const handleAddPaymentClick = (customer) => {
+    setPaymentCustomer(customer);
+    setPaymentAmount(customer.remainingAmount);
+    setPaymentMethod('Cash');
+    setPaymentDate(new Date().toISOString().split('T')[0]);
+    setPaymentComment('');
+    setChequeNumber('');
+    setPaymentErrors({});
+    setShowPaymentModal(true);
+  };
+
+  const handlePaymentSubmit = async (e) => {
+    e.preventDefault();
+    const amount = Math.round(parseFloat(paymentAmount));
+    const remaining = Math.round(paymentCustomer.remainingAmount);
+    const newErrors = {};
+    if (!paymentAmount || amount <= 0) {
+      newErrors.amount = 'Please enter a valid payment amount';
+    }
+    if (paymentMethod === 'Cheque' && !chequeNumber.trim()) {
+      newErrors.chequeNumber = 'Cheque number is required';
+    }
+    if (paymentMethod === 'Other' && !paymentComment.trim()) {
+      newErrors.comment = 'Comment is required for "Other" payment method';
+    }
+    setPaymentErrors(newErrors);
+    if (Object.keys(newErrors).length > 0) return;
+
+    try {
+      // Add payment record to paymentHistory
+      await addDoc(collection(db, 'paymentHistory'), {
+        customerPhone: paymentCustomer.phone,
+        amount: amount,
+        paymentMethod,
+        comment: paymentMethod === 'Other' ? paymentComment : '',
+        chequeNumber: paymentMethod === 'Cheque' ? chequeNumber : '',
+        date: new Date(paymentDate).toISOString(),
+        type: 'Customer Payment'
+      });
+      // Update all sales for this customer with remaining > 0
+      const salesToUpdate = paymentCustomer.sales.filter(sale => sale.remainingAmount > 0);
+      let remainingToPay = amount;
+      for (const sale of salesToUpdate) {
+        if (remainingToPay <= 0) break;
+        const payAmount = Math.min(remainingToPay, sale.remainingAmount);
+        const saleDoc = doc(db, 'receipts', sale.id);
+        await updateDoc(saleDoc, {
+          paidAmount: (sale.paidAmount || 0) + payAmount,
+          remainingAmount: Math.max(0, sale.remainingAmount - payAmount),
+          isDebt: sale.remainingAmount - payAmount > 0
+        });
+        remainingToPay -= payAmount;
+      }
+      // If there is still remainingToPay (i.e., customer had no dues or overpayment), record as negative remainingAmount (credit)
+      if (remainingToPay > 0) {
+        // Optionally, you can store this as a special credit record or update a customer credit field
+        // For now, just add a negative sale to reflect the credit
+        await addDoc(collection(db, 'receipts'), {
+          customerName: paymentCustomer.name,
+          customerPhone: paymentCustomer.phone,
+          totalAmount: 0,
+          paidAmount: 0,
+          remainingAmount: -remainingToPay,
+          date: new Date(paymentDate).toISOString(),
+          paymentMethod,
+          chequeNumber: paymentMethod === 'Cheque' ? chequeNumber : '',
+          comment: paymentMethod === 'Other' ? paymentComment : '',
+          items: [],
+          isCredit: true
+        });
+      }
+      setShowPaymentModal(false);
+      setPaymentCustomer(null);
+      setPaymentAmount('');
+      setPaymentMethod('Cash');
+      setPaymentDate(new Date().toISOString().split('T')[0]);
+      setPaymentComment('');
+      setChequeNumber('');
+      setPaymentErrors({});
+      // Refresh customer data
+      fetchCustomerData();
+    } catch (error) {
+      alert('Error saving payment: ' + error.message);
+    }
+  };
+
   const filteredCustomers = Object.values(customers).filter(customer =>
     (customer.name?.toLowerCase().includes(searchTerm.toLowerCase()) || false) ||
     (customer.phone?.includes(searchTerm) || false)
@@ -194,6 +259,7 @@ function CustomerManagement() {
         <table className="min-w-full divide-y divide-gray-200">
           <thead className="bg-gray-50">
             <tr>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Names</th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Customer</th>
               <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Total (PKR)</th>
               <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Paid (PKR)</th>
@@ -203,10 +269,12 @@ function CustomerManagement() {
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
             {filteredCustomers.map((customer, index) => (
-              <tr key={index} className={`hover:bg-gray-50 ${customer.remainingAmount > 0 ? 'bg-red-50' : ''}`}>
+              <tr key={index} className={`hover:bg-gray-50 ${customer.remainingAmount > 0 ? 'bg-red-50' : customer.remainingAmount < 0 ? 'bg-green-50' : ''}`}>
                 <td className="px-6 py-4 whitespace-nowrap">
-                  <div className="text-sm font-medium text-gray-900">{customer.name}</div>
-                  <div className="text-sm text-gray-500">{customer.phone}</div>
+                  <div className="text-sm text-gray-900">{customer.names?.join(', ')}</div>
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap">
+                  <div className="text-sm font-medium text-gray-900">{customer.phone}</div>
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-right">
                   {Math.round(customer.totalAmount)}
@@ -214,8 +282,8 @@ function CustomerManagement() {
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-right">
                   {Math.round(customer.paidAmount)}
                 </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-red-600 text-right">
-                  {customer.remainingAmount > 0 ? Math.round(customer.remainingAmount) : '-'}
+                <td className={`px-6 py-4 whitespace-nowrap text-sm text-right ${customer.remainingAmount > 0 ? 'text-green-600' : customer.remainingAmount < 0 ? 'text-red-600' : 'text-gray-900'}`}>
+                  {customer.remainingAmount !== 0 ? Math.round(customer.remainingAmount) : '-'}
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-center space-x-2">
                   <button
@@ -235,6 +303,15 @@ function CustomerManagement() {
                     <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                    </svg>
+                  </button>
+                  <button
+                    onClick={() => handleAddPaymentClick(customer)}
+                    className="ml-2 text-green-600 hover:text-green-800"
+                    title="Add Payment"
+                  >
+                    <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
                   </button>
                 </td>
@@ -282,15 +359,21 @@ function CustomerManagement() {
                 <div className="grid grid-cols-3 gap-4">
                   <div className="bg-white p-4 rounded-lg shadow">
                     <div className="text-sm text-gray-500">Total Amount</div>
-                    <div className="text-xl font-semibold text-gray-900">Rs {Math.round(selectedCustomer.totalAmount)}</div>
+                    <div className="text-xl font-semibold text-gray-900">
+                      Rs {Math.round(selectedCustomer.totalAmount)}
+                    </div>
                   </div>
                   <div className="bg-white p-4 rounded-lg shadow">
                     <div className="text-sm text-gray-500">Total Paid</div>
-                    <div className="text-xl font-semibold text-gray-900">Rs {Math.round(selectedCustomer.paidAmount)}</div>
+                    <div className="text-xl font-semibold text-gray-900">
+                      Rs {Math.round(selectedCustomer.paidAmount)}
+                    </div>
                   </div>
                   <div className="bg-white p-4 rounded-lg shadow">
                     <div className="text-sm text-gray-500">Remaining Amount</div>
-                    <div className="text-xl font-semibold text-red-600">Rs {Math.round(selectedCustomer.remainingAmount)}</div>
+                    <div className={`text-xl font-semibold ${selectedCustomer.remainingAmount > 0 ? 'text-green-600' : selectedCustomer.remainingAmount < 0 ? 'text-red-600' : 'text-gray-900'}`}>
+                      Rs {Math.round(selectedCustomer.remainingAmount)}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -428,6 +511,64 @@ function CustomerManagement() {
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {showPaymentModal && paymentCustomer && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-6">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">
+                {paymentCustomer.remainingAmount > 0 ? 'Add Payment' : 'Add Credit'} for {paymentCustomer.name}
+              </h3>
+              <button onClick={() => setShowPaymentModal(false)} className="text-gray-500 hover:text-gray-700">✕</button>
+            </div>
+            <form onSubmit={handlePaymentSubmit} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Amount (PKR)</label>
+                <input 
+                  type="number" 
+                  value={paymentAmount} 
+                  onChange={e => setPaymentAmount(e.target.value)} 
+                  className="w-full px-4 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500" 
+                  min="1" 
+                  required 
+                />
+                {paymentErrors.amount && <p className="mt-1 text-sm text-red-600">{paymentErrors.amount}</p>}
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Payment Method</label>
+                <select value={paymentMethod} onChange={e => setPaymentMethod(e.target.value)} className="w-full px-4 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                  <option value="Cash">Cash</option>
+                  <option value="Card">Card</option>
+                  <option value="Cheque">Cheque</option>
+                  <option value="Other">Other</option>
+                </select>
+              </div>
+              {paymentMethod === 'Cheque' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Cheque Number</label>
+                  <input type="text" value={chequeNumber} onChange={e => setChequeNumber(e.target.value)} className="w-full px-4 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500" required />
+                  {paymentErrors.chequeNumber && <p className="mt-1 text-sm text-red-600">{paymentErrors.chequeNumber}</p>}
+                </div>
+              )}
+              {paymentMethod === 'Other' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Comment</label>
+                  <input type="text" value={paymentComment} onChange={e => setPaymentComment(e.target.value)} className="w-full px-4 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500" required />
+                  {paymentErrors.comment && <p className="mt-1 text-sm text-red-600">{paymentErrors.comment}</p>}
+                </div>
+              )}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Date</label>
+                <input type="date" value={paymentDate} onChange={e => setPaymentDate(e.target.value)} className="w-full px-4 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500" required />
+              </div>
+              <div className="flex justify-end space-x-3">
+                <button type="button" onClick={() => setShowPaymentModal(false)} className="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-gray-700 hover:bg-gray-50">Cancel</button>
+                <button type="submit" className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-md shadow-sm transition-all">Add Payment</button>
+              </div>
+            </form>
           </div>
         </div>
       )}

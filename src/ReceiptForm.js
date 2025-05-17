@@ -387,7 +387,7 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
                 </div>
                 <div>
                   <div className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm bg-gray-50">
-                    <div className="text-gray-700">Rs {Math.round(item.quantity * item.price)}</div>
+                    <div className="text-gray-700">{Math.round(item.quantity * item.price)}</div>
                   </div>
                 </div>
                 <div className="flex items-center">
@@ -419,7 +419,7 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
           <div className="space-y-4">
             <div className="flex justify-between items-center">
               <div className="text-gray-700">Subtotal:</div>
-              <div className="text-gray-700">Rs {Math.round(subtotal)}</div>
+              <div className="text-gray-700">{Math.round(subtotal)}</div>
             </div>
 
             <div className="flex justify-between items-center">
@@ -449,14 +449,14 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
                 )}
               </div>
               {showDiscount && (
-                <div className="text-red-600">- Rs {Math.round(discountAmount)}</div>
+                <div className="text-red-600">- {Math.round(discountAmount)}</div>
               )}
             </div>
 
             <div className="border-t pt-2">
               <div className="flex justify-between items-center font-semibold">
                 <div className="text-gray-900">Total Amount:</div>
-                <div className="text-gray-900">Rs {Math.round(total)}</div>
+                <div className="text-gray-900">{Math.round(total)}</div>
               </div>
             </div>
 
@@ -483,7 +483,7 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
                 <label className="block text-sm font-medium text-gray-700 mb-1">Paid Amount</label>
                 <input
                   type="number"
-                  value={paidAmount === 0 ? '' : paidAmount}
+                  value={paidAmount}
                   onChange={(e) => {
                     let val = e.target.value;
                     if (val.length > 1 && val.startsWith('0')) {
@@ -503,7 +503,7 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
                   <p className="mt-1 text-sm text-red-600">{errors.paidAmount}</p>
                 )}
                 <div className="mt-2 text-sm text-gray-600">
-                  Remaining Amount: Rs {Math.round(remainingAmount)}
+                  Remaining Amount: {Math.round(remainingAmount)}
                 </div>
               </div>
             )}
