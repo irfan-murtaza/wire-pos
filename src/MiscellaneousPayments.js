@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { collection, addDoc, getDocs, query, orderBy, Timestamp } from 'firebase/firestore';
+import { collection, addDoc, getDocs, query, orderBy, Timestamp, doc, updateDoc } from 'firebase/firestore';
 import { db } from './firebase';
 
 function MiscellaneousPayments() {
   const [payments, setPayments] = useState([]);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editPayment, setEditPayment] = useState(null);
   const [newPayment, setNewPayment] = useState({
     amount: '',
     date: new Date().toISOString().split('T')[0],
@@ -105,6 +107,46 @@ function MiscellaneousPayments() {
     });
   };
 
+  const handleEditPayment = (payment) => {
+    setEditPayment(payment);
+    setShowEditModal(true);
+    setErrors({});
+  };
+
+  const handleUpdatePayment = async () => {
+    if (!editPayment) return;
+    // Validate
+    const newErrors = {};
+    if (!editPayment.amount || parseFloat(editPayment.amount) <= 0) {
+      newErrors.amount = 'Amount must be greater than 0';
+    }
+    if (!editPayment.date) {
+      newErrors.date = 'Date is required';
+    }
+    if (!editPayment.type.trim()) {
+      newErrors.type = 'Payment type is required';
+    }
+    if (!editPayment.details.trim()) {
+      newErrors.details = 'Payment details are required';
+    }
+    setErrors(newErrors);
+    if (Object.keys(newErrors).length > 0) return;
+    try {
+      const paymentRef = doc(db, 'miscellaneousPayments', editPayment.id);
+      await updateDoc(paymentRef, {
+        amount: parseFloat(editPayment.amount),
+        date: editPayment.date,
+        type: editPayment.type,
+        details: editPayment.details
+      });
+      setShowEditModal(false);
+      setEditPayment(null);
+      fetchPayments();
+    } catch (error) {
+      alert('Error updating payment: ' + error.message);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
@@ -125,6 +167,11 @@ function MiscellaneousPayments() {
         </div>
       </div>
 
+      {/* Display Total Amount */}
+      <div className="text-xl font-semibold text-gray-800 mt-4">
+        Total for {selectedMonth}: {formatCurrency(payments.reduce((sum, payment) => sum + (parseFloat(payment.amount) || 0), 0))}
+      </div>
+
       <div className="overflow-hidden shadow ring-1 ring-black ring-opacity-5 sm:rounded-lg">
         <table className="min-w-full divide-y divide-gray-300">
           <thead className="bg-gray-50">
@@ -133,6 +180,7 @@ function MiscellaneousPayments() {
               <th className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">Type</th>
               <th className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">Details</th>
               <th className="px-3 py-3.5 text-right text-sm font-semibold text-gray-900">Amount</th>
+              <th className="px-3 py-3.5 text-right text-sm font-semibold text-gray-900">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-200 bg-white">
@@ -148,7 +196,15 @@ function MiscellaneousPayments() {
                   {payment.details}
                 </td>
                 <td className="px-3 py-4 text-sm text-right text-red-600">
-                  ({formatCurrency(payment.amount)})
+                  ({Number(payment.amount).toLocaleString()})
+                </td>
+                <td className="px-3 py-4 text-sm text-right">
+                  <button
+                    onClick={() => handleEditPayment(payment)}
+                    className="text-blue-600 hover:text-blue-800 underline"
+                  >
+                    Edit
+                  </button>
                 </td>
               </tr>
             ))}
@@ -235,6 +291,79 @@ function MiscellaneousPayments() {
                 className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700"
               >
                 Add Payment
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showEditModal && editPayment && (
+        <div className="fixed inset-0 bg-gray-500 bg-opacity-75 flex items-center justify-center">
+          <div className="bg-white rounded-lg p-6 max-w-md w-full">
+            <h3 className="text-lg font-medium mb-4">Edit Miscellaneous Payment</h3>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Amount</label>
+                <input
+                  type="number"
+                  value={editPayment.amount}
+                  onChange={e => setEditPayment({ ...editPayment, amount: e.target.value })}
+                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm"
+                />
+                {errors.amount && (
+                  <p className="mt-1 text-sm text-red-600">{errors.amount}</p>
+                )}
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Date</label>
+                <input
+                  type="date"
+                  value={editPayment.date}
+                  onChange={e => setEditPayment({ ...editPayment, date: e.target.value })}
+                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm"
+                />
+                {errors.date && (
+                  <p className="mt-1 text-sm text-red-600">{errors.date}</p>
+                )}
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Payment Type</label>
+                <input
+                  type="text"
+                  value={editPayment.type}
+                  onChange={e => setEditPayment({ ...editPayment, type: e.target.value })}
+                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm"
+                  placeholder="e.g., Rent, Utilities, Maintenance"
+                />
+                {errors.type && (
+                  <p className="mt-1 text-sm text-red-600">{errors.type}</p>
+                )}
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Details</label>
+                <textarea
+                  value={editPayment.details}
+                  onChange={e => setEditPayment({ ...editPayment, details: e.target.value })}
+                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm"
+                  rows="3"
+                />
+                {errors.details && (
+                  <p className="mt-1 text-sm text-red-600">{errors.details}</p>
+                )}
+              </div>
+            </div>
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                onClick={() => setShowEditModal(false)}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleUpdatePayment}
+                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700"
+              >
+                Save Changes
               </button>
             </div>
           </div>
