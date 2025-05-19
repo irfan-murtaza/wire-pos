@@ -6,7 +6,6 @@ function SupplierManagement() {
   const [suppliers, setSuppliers] = useState([]);
   const [showAddModal, setShowAddModal] = useState(false);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
-  const [showProductModal, setShowProductModal] = useState(false);
   const [selectedSupplier, setSelectedSupplier] = useState(null);
   const [supplierProducts, setSupplierProducts] = useState([]);
   const [newSupplier, setNewSupplier] = useState({
@@ -21,7 +20,8 @@ function SupplierManagement() {
     quantity: 0,
     totalPrice: 0,
     paidAmount: 0,
-    remainingAmount: 0
+    remainingAmount: 0,
+    // unit: '' // Removed unit field
   });
   const [payment, setPayment] = useState({
     amount: '',
@@ -47,11 +47,41 @@ function SupplierManagement() {
     try {
       const suppliersQuery = query(collection(db, 'suppliers'), orderBy('name'));
       const querySnapshot = await getDocs(suppliersQuery);
-      const suppliersList = querySnapshot.docs.map(doc => ({
+      const suppliersData = querySnapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       }));
-      setSuppliers(suppliersList);
+
+      // Group suppliers by phone number and aggregate data
+      const groupedSuppliers = suppliersData.reduce((acc, supplier) => {
+        if (!acc[supplier.phone]) {
+          acc[supplier.phone] = {
+            phone: supplier.phone,
+            names: new Set(),
+            totalAmount: 0,
+            paidAmount: 0,
+            remainingAmount: 0,
+            // Assuming one address per phone or showing the first one
+            address: supplier.address,
+            // Store IDs to access for actions later, using the first one for simplicity
+            id: supplier.id,
+          };
+        }
+        acc[supplier.phone].names.add(supplier.name.trim()); // Add distinct names
+        acc[supplier.phone].totalAmount += supplier.balance; // Sum total amounts
+        acc[supplier.phone].paidAmount += supplier.balance; // Sum paid amounts
+        acc[supplier.phone].remainingAmount += supplier.balance; // Sum remaining amounts (balance)
+        return acc;
+      }, {});
+
+      // Convert grouped object back to an array and format names
+      const groupedSuppliersList = Object.values(groupedSuppliers).map(group => ({
+        ...group,
+        names: Array.from(group.names).join(', '),
+        remainingAmount: Math.round(group.remainingAmount)
+      }));
+
+      setSuppliers(groupedSuppliersList);
     } catch (error) {
       console.error('Error fetching suppliers:', error);
       alert('Error fetching suppliers. Please check console for details.');
@@ -69,7 +99,8 @@ function SupplierManagement() {
         quantity: Math.round(doc.data().quantity || 0),
         totalPrice: Math.round(doc.data().totalPrice || 0),
         paidAmount: Math.round(doc.data().paidAmount || 0),
-        remainingAmount: Math.round(doc.data().remainingAmount || 0)
+        remainingAmount: Math.round(doc.data().remainingAmount || 0),
+        // unit: doc.data().unit || '' // Removed unit from fetch
       }));
       setSupplierProducts(productsList);
     } catch (error) {
@@ -222,33 +253,77 @@ function SupplierManagement() {
       const remainingAmount = Math.round(totalPrice - paidAmount);
       const currentDate = new Date().toISOString();
 
-      // Add the product
-      const productDoc = await addDoc(collection(db, 'supplierProducts'), {
-        ...newProduct,
-        supplierId: selectedSupplier.id,
-        totalPrice: Math.round(totalPrice),
-        paidAmount: Math.round(paidAmount),
-        remainingAmount: Math.round(remainingAmount),
-        createdAt: currentDate,
-        purchases: [{
-          date: currentDate,
-          quantity: newProduct.quantity,
-          unitPrice: newProduct.unitPrice,
-          totalValue: totalPrice
-        }]
-      });
+      // Check for existing product with same name and unit price for this supplier
+      const existingProduct = supplierProducts.find(
+        p =>
+          p.name.trim().toLowerCase() === newProduct.name.trim().toLowerCase() &&
+          Number(p.unitPrice) === Number(newProduct.unitPrice)
+      );
 
-      // If there's an initial payment, add it to payment history
-      if (paidAmount > 0) {
-        await addDoc(collection(db, 'supplierPayments'), {
-          supplierId: selectedSupplier.id,
-          amount: Math.round(paidAmount),
-          date: currentDate.split('T')[0],
-          description: `Initial payment for ${newProduct.name}`,
-          paymentMethod: 'Cash',
-          chequeNumber: '',
-          createdAt: currentDate
+      if (existingProduct) {
+        // Update existing product: increase quantity, totalPrice, remainingAmount, add to purchases
+        const updatedQuantity = existingProduct.quantity + newProduct.quantity;
+        const updatedTotalPrice = existingProduct.totalPrice + totalPrice;
+        const updatedPaidAmount = (existingProduct.paidAmount || 0) + paidAmount;
+        const updatedRemainingAmount = updatedTotalPrice - updatedPaidAmount;
+        const updatedPurchases = [
+          ...(existingProduct.purchases || []),
+          {
+            date: currentDate,
+            quantity: newProduct.quantity,
+            unitPrice: newProduct.unitPrice,
+            totalValue: totalPrice
+          }
+        ];
+        const productRef = doc(db, 'supplierProducts', existingProduct.id);
+        await updateDoc(productRef, {
+          quantity: updatedQuantity,
+          totalPrice: updatedTotalPrice,
+          paidAmount: updatedPaidAmount,
+          remainingAmount: updatedRemainingAmount,
+          purchases: updatedPurchases
         });
+        // If there's an initial payment, add it to payment history
+        if (paidAmount > 0) {
+          await addDoc(collection(db, 'supplierPayments'), {
+            supplierId: selectedSupplier.id,
+            amount: Math.round(paidAmount),
+            date: currentDate.split('T')[0],
+            description: `Initial payment for ${newProduct.name}`,
+            paymentMethod: 'Cash',
+            chequeNumber: '',
+            createdAt: currentDate
+          });
+        }
+      } else {
+        // Add the product as new
+        await addDoc(collection(db, 'supplierProducts'), {
+          ...newProduct,
+          supplierId: selectedSupplier.id,
+          totalPrice: Math.round(totalPrice),
+          paidAmount: Math.round(paidAmount),
+          remainingAmount: Math.round(remainingAmount),
+          createdAt: currentDate,
+          purchases: [{
+            date: currentDate,
+            quantity: newProduct.quantity,
+            unitPrice: newProduct.unitPrice,
+            totalValue: totalPrice
+          }],
+          // unit: newProduct.unit // Removed unit from fetch
+        });
+        // If there's an initial payment, add it to payment history
+        if (paidAmount > 0) {
+          await addDoc(collection(db, 'supplierPayments'), {
+            supplierId: selectedSupplier.id,
+            amount: Math.round(paidAmount),
+            date: currentDate.split('T')[0],
+            description: `Initial payment for ${newProduct.name}`,
+            paymentMethod: 'Cash',
+            chequeNumber: '',
+            createdAt: currentDate
+          });
+        }
       }
 
       // Update supplier balance
@@ -257,16 +332,6 @@ function SupplierManagement() {
         balance: Math.round(selectedSupplier.balance + remainingAmount)
       });
 
-      setShowProductModal(false);
-      setNewProduct({
-        name: '',
-        unitPrice: 0,
-        quantity: 0,
-        totalPrice: 0,
-        paidAmount: 0,
-        remainingAmount: 0
-      });
-      setErrors({});
       setShowSuccess(true);
       setTimeout(() => setShowSuccess(false), 3000);
       fetchSuppliers();
@@ -330,7 +395,6 @@ function SupplierManagement() {
   const handleViewProducts = (supplier) => {
     setSelectedSupplier(supplier);
     fetchSupplierProducts(supplier.id);
-    setShowProductModal(true);
   };
 
   const handleViewDetails = (supplier) => {
@@ -343,7 +407,7 @@ function SupplierManagement() {
     <div className="space-y-6">
       {showSuccess && (
         <div className="fixed top-4 right-4 bg-green-500 text-white px-6 py-3 rounded-lg shadow-lg z-50">
-          {showProductModal ? 'Product added successfully!' : 'Supplier added successfully!'}
+          {selectedSupplier ? 'Product added successfully!' : 'Supplier added successfully!'}
         </div>
       )}
 
@@ -357,385 +421,317 @@ function SupplierManagement() {
         </button>
       </div>
 
-      <div className="bg-white rounded-lg shadow overflow-hidden">
-        <table className="min-w-full divide-y divide-gray-200">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Supplier</th>
-              <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Phone</th>
-              <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Address</th>
-              <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Amount to be Paid (PKR)</th>
-              <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="bg-white divide-y divide-gray-200">
-            {suppliers.map((supplier) => (
-              <tr key={supplier.id} className="hover:bg-gray-50">
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-center">
-                  {supplier.name}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-center">
-                  {supplier.phone}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-center">
-                  {supplier.address}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-center">
-                  {Math.round(supplier.balance)}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-center space-x-2">
-                  <button
-                    onClick={() => handleViewDetails(supplier)}
-                    className="text-blue-600 hover:text-blue-800 mr-2"
-                    title="View Details"
-                  >
-                    <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                    </svg>
-                  </button>
-                  <button
-                    onClick={() => handleViewProducts(supplier)}
-                    className="text-blue-600 hover:text-blue-800 mr-2"
-                    title="View Products"
-                  >
-                    <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-                    </svg>
-                  </button>
-                </td>
+      {/* Conditionally render supplier list or product details */}
+      {!selectedSupplier ? (
+        /* Supplier List Table */
+        <div className="bg-white rounded-lg shadow overflow-hidden">
+          <table className="min-w-full divide-y divide-gray-200">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Supplier</th>
+                <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Phone</th>
+                <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Address</th>
+                <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Total Amount (PKR)</th>
+                <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Paid Amount (PKR)</th>
+                <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Remaining Amount (PKR)</th>
+                <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Actions</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody className="bg-white divide-y divide-gray-200">
+              {suppliers.map((supplierGroup) => (
+                <tr key={supplierGroup.id} className="hover:bg-gray-50">
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-center">
+                    {supplierGroup.names}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-center">
+                    {supplierGroup.phone}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-center">
+                    {supplierGroup.address}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-center">
+                    {supplierGroup.totalAmount}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-center">
+                    {supplierGroup.paidAmount}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-center">
+                    {supplierGroup.remainingAmount}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-center space-x-2">
+                    <button
+                      onClick={() => handleViewDetails(supplierGroup)}
+                      className="text-blue-600 hover:text-blue-800 mr-2"
+                      title="View Details"
+                    >
+                      <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                      </svg>
+                    </button>
+                    <button
+                      onClick={() => handleViewProducts(supplierGroup)}
+                      className="text-blue-600 hover:text-blue-800 mr-2"
+                      title="View Products"
+                    >
+                      <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                      </svg>
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        /* Product Details View */
+        <div className="bg-white rounded-lg shadow-xl w-full p-6 space-y-6">
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="text-lg font-semibold">Products for {selectedSupplier.name}</h3>
+            <button
+              onClick={() => {
+                setSelectedSupplier(null);
+                setSupplierProducts([]);
+                setShowNewProductForm(false);
+              }}
+              className="bg-gray-300 hover:bg-gray-400 text-gray-800 px-4 py-2 rounded-md shadow-sm transition-all"
+            >
+              Back to Suppliers
+            </button>
+          </div>
 
-      {/* Add Supplier Modal */}
-      {showAddModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
-            <h3 className="text-lg font-semibold mb-4">Add New Supplier</h3>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Name</label>
-                <input
-                  type="text"
-                  value={newSupplier.name}
-                  onChange={(e) => {
-                    const value = e.target.value.replace(/[0-9]/g, '');
-                    setNewSupplier({ ...newSupplier, name: value });
-                    if (errors.name) {
-                      setErrors(prev => ({ ...prev, name: '' }));
-                    }
-                  }}
-                  maxLength={50}
-                  className={`mt-1 block w-full border rounded-md shadow-sm p-2 ${
-                    errors.name ? 'border-red-500' : 'border-gray-300'
-                  }`}
-                />
-                {errors.name && (
-                  <p className="mt-1 text-sm text-red-600">{errors.name}</p>
-                )}
+          <div className="mb-6">
+            <button
+              onClick={() => {
+                setNewProduct({
+                  name: '',
+                  unitPrice: 0,
+                  quantity: 0,
+                  totalPrice: 0,
+                  paidAmount: 0,
+                  remainingAmount: 0,
+                  // unit: '' // Removed unit reset
+                });
+                setShowNewProductForm(true);
+              }}
+              className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md shadow-sm transition-all"
+            >
+              Add New Product
+            </button>
+          </div>
+
+          {/* Add New Product Form */}
+          {showNewProductForm && (
+            <div className="bg-gray-50 p-4 rounded-lg mb-6">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Product Name</label>
+                  <input
+                    type="text"
+                    value={newProduct.name}
+                    onChange={(e) => {
+                      setNewProduct({ ...newProduct, name: e.target.value });
+                      if (errors.name) {
+                        setErrors(prev => ({ ...prev, name: '' }));
+                      }
+                    }}
+                    className={`mt-1 block w-full border rounded-md shadow-sm p-2 ${
+                      errors.name ? 'border-red-500' : 'border-gray-300'
+                    }`}
+                  />
+                  {errors.name && (
+                    <p className="mt-1 text-sm text-red-600">{errors.name}</p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Unit Price (PKR)</label>
+                  <input
+                    type="number"
+                    value={newProduct.unitPrice}
+                    onChange={(e) => {
+                      const value = Math.round(parseFloat(e.target.value) || 0);
+                      const totalPrice = Math.round(value * newProduct.quantity);
+                      setNewProduct({
+                        ...newProduct,
+                        unitPrice: value,
+                        totalPrice: totalPrice,
+                        remainingAmount: Math.round(totalPrice - newProduct.paidAmount)
+                      });
+                      if (errors.unitPrice) {
+                        setErrors(prev => ({ ...prev, unitPrice: '' }));
+                      }
+                    }}
+                    className={`mt-1 block w-full border rounded-md shadow-sm p-2 ${
+                      errors.unitPrice ? 'border-red-500' : 'border-gray-300'
+                    }`}
+                    min="1"
+                    step="1"
+                  />
+                  {errors.unitPrice && (
+                    <p className="mt-1 text-sm text-red-600">{errors.unitPrice}</p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Quantity</label>
+                  <input
+                    type="number"
+                    value={newProduct.quantity}
+                    onChange={(e) => {
+                      const value = Math.round(parseFloat(e.target.value) || 0);
+                      const totalPrice = Math.round(newProduct.unitPrice * value);
+                      setNewProduct({
+                        ...newProduct,
+                        quantity: value,
+                        totalPrice: totalPrice,
+                        remainingAmount: Math.round(totalPrice - newProduct.paidAmount)
+                      });
+                      if (errors.quantity) {
+                        setErrors(prev => ({ ...prev, quantity: '' }));
+                      }
+                    }}
+                    className={`mt-1 block w-full border rounded-md shadow-sm p-2 ${
+                      errors.quantity ? 'border-red-500' : 'border-gray-300'
+                    }`}
+                    min="1"
+                    step="1"
+                  />
+                  {errors.quantity && (
+                    <p className="mt-1 text-sm text-red-600">{errors.quantity}</p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Paid Amount (PKR)</label>
+                  <input
+                    type="number"
+                    value={newProduct.paidAmount}
+                    onChange={(e) => {
+                      const value = Math.round(parseFloat(e.target.value) || 0);
+                      const totalPrice = Math.round(newProduct.unitPrice * newProduct.quantity);
+                      setNewProduct({
+                        ...newProduct,
+                        paidAmount: value,
+                        remainingAmount: Math.round(totalPrice - value)
+                      });
+                      if (errors.paidAmount) {
+                        setErrors(prev => ({ ...prev, paidAmount: '' }));
+                      }
+                    }}
+                    className={`mt-1 block w-full border rounded-md shadow-sm p-2 ${
+                      errors.paidAmount ? 'border-red-500' : 'border-gray-300'
+                    }`}
+                    min="0"
+                    step="1"
+                  />
+                  {errors.paidAmount && (
+                    <p className="mt-1 text-sm text-red-600">{errors.paidAmount}</p>
+                  )}
+                </div>
               </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Phone</label>
-                <input
-                  type="text"
-                  value={newSupplier.phone}
-                  onChange={(e) => {
-                    const value = e.target.value.replace(/\D/g, '').slice(0, 11);
-                    setNewSupplier({ ...newSupplier, phone: value });
-                    if (errors.phone) {
-                      setErrors(prev => ({ ...prev, phone: '' }));
-                    }
-                  }}
-                  className={`mt-1 block w-full border rounded-md shadow-sm p-2 ${
-                    errors.phone ? 'border-red-500' : 'border-gray-300'
-                  }`}
-                  maxLength={11}
-                />
-                {errors.phone && (
-                  <p className="mt-1 text-sm text-red-600">{errors.phone}</p>
-                )}
+              <div className="mt-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">Total Price (PKR)</label>
+                    <div className="mt-1 p-2 bg-gray-50 rounded-md">
+                      {Math.round(newProduct.unitPrice * newProduct.quantity)}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">Remaining Amount (PKR)</label>
+                    <div className="mt-1 p-2 bg-gray-50 rounded-md">
+                      {Math.round((newProduct.unitPrice * newProduct.quantity) - newProduct.paidAmount)}
+                    </div>
+                  </div>
+                </div>
               </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Address</label>
-                <textarea
-                  value={newSupplier.address}
-                  onChange={(e) => setNewSupplier({ ...newSupplier, address: e.target.value })}
-                  className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2"
-                  rows={3}
-                />
-              </div>
-              <div className="flex justify-end space-x-3">
+              <div className="flex justify-end space-x-3 mt-6">
                 <button
                   onClick={() => {
-                    setShowAddModal(false);
-                    setErrors({});
+                    setNewProduct({
+                      name: '',
+                      unitPrice: 0,
+                      quantity: 0,
+                      totalPrice: 0,
+                      paidAmount: 0,
+                      remainingAmount: 0,
+                      // unit: '' // Removed unit reset
+                    });
+                    setShowNewProductForm(false);
                   }}
                   className="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-gray-700 hover:bg-gray-50"
                 >
                   Cancel
                 </button>
                 <button
-                  onClick={handleAddSupplier}
+                  onClick={handleAddProduct}
                   className="px-4 py-2 bg-blue-600 text-white rounded-md shadow-sm hover:bg-blue-700"
                 >
-                  Add Supplier
+                  Add Product
                 </button>
               </div>
             </div>
-          </div>
-        </div>
-      )}
+          )}
 
-      {/* Add Product Modal */}
-      {showProductModal && selectedSupplier && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full p-6">
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="text-lg font-semibold">Products for {selectedSupplier.name}</h3>
-              <button
-                onClick={() => {
-                  setShowProductModal(false);
-                  setSelectedSupplier(null);
-                  setSupplierProducts([]);
-                }}
-                className="text-gray-500 hover:text-gray-700"
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="mb-6">
-              <button
-                onClick={() => {
-                  setNewProduct({
-                    name: '',
-                    unitPrice: 0,
-                    quantity: 0,
-                    totalPrice: 0,
-                    paidAmount: 0,
-                    remainingAmount: 0
-                  });
-                  setShowNewProductForm(true);
-                }}
-                className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md shadow-sm transition-all"
-              >
-                Add New Product
-              </button>
-            </div>
-
-            {/* Add New Product Form */}
-            {showNewProductForm && (
-              <div className="bg-gray-50 p-4 rounded-lg mb-6">
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700">Product Name</label>
-                    <input
-                      type="text"
-                      value={newProduct.name}
-                      onChange={(e) => {
-                        setNewProduct({ ...newProduct, name: e.target.value });
-                        if (errors.name) {
-                          setErrors(prev => ({ ...prev, name: '' }));
-                        }
-                      }}
-                      className={`mt-1 block w-full border rounded-md shadow-sm p-2 ${
-                        errors.name ? 'border-red-500' : 'border-gray-300'
-                      }`}
-                    />
-                    {errors.name && (
-                      <p className="mt-1 text-sm text-red-600">{errors.name}</p>
-                    )}
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700">Unit Price (PKR)</label>
-                    <input
-                      type="number"
-                      value={newProduct.unitPrice}
-                      onChange={(e) => {
-                        const value = Math.round(parseFloat(e.target.value) || 0);
-                        const totalPrice = Math.round(value * newProduct.quantity);
-                        setNewProduct({
-                          ...newProduct,
-                          unitPrice: value,
-                          totalPrice: totalPrice,
-                          remainingAmount: Math.round(totalPrice - newProduct.paidAmount)
-                        });
-                        if (errors.unitPrice) {
-                          setErrors(prev => ({ ...prev, unitPrice: '' }));
-                        }
-                      }}
-                      className={`mt-1 block w-full border rounded-md shadow-sm p-2 ${
-                        errors.unitPrice ? 'border-red-500' : 'border-gray-300'
-                      }`}
-                      min="1"
-                      step="1"
-                    />
-                    {errors.unitPrice && (
-                      <p className="mt-1 text-sm text-red-600">{errors.unitPrice}</p>
-                    )}
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700">Quantity</label>
-                    <input
-                      type="number"
-                      value={newProduct.quantity}
-                      onChange={(e) => {
-                        const value = Math.round(parseFloat(e.target.value) || 0);
-                        const totalPrice = Math.round(newProduct.unitPrice * value);
-                        setNewProduct({
-                          ...newProduct,
-                          quantity: value,
-                          totalPrice: totalPrice,
-                          remainingAmount: Math.round(totalPrice - newProduct.paidAmount)
-                        });
-                        if (errors.quantity) {
-                          setErrors(prev => ({ ...prev, quantity: '' }));
-                        }
-                      }}
-                      className={`mt-1 block w-full border rounded-md shadow-sm p-2 ${
-                        errors.quantity ? 'border-red-500' : 'border-gray-300'
-                      }`}
-                      min="1"
-                      step="1"
-                    />
-                    {errors.quantity && (
-                      <p className="mt-1 text-sm text-red-600">{errors.quantity}</p>
-                    )}
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700">Paid Amount (PKR)</label>
-                    <input
-                      type="number"
-                      value={newProduct.paidAmount}
-                      onChange={(e) => {
-                        const value = Math.round(parseFloat(e.target.value) || 0);
-                        const totalPrice = Math.round(newProduct.unitPrice * newProduct.quantity);
-                        setNewProduct({
-                          ...newProduct,
-                          paidAmount: value,
-                          remainingAmount: Math.round(totalPrice - value)
-                        });
-                        if (errors.paidAmount) {
-                          setErrors(prev => ({ ...prev, paidAmount: '' }));
-                        }
-                      }}
-                      className={`mt-1 block w-full border rounded-md shadow-sm p-2 ${
-                        errors.paidAmount ? 'border-red-500' : 'border-gray-300'
-                      }`}
-                      min="0"
-                      step="1"
-                    />
-                    {errors.paidAmount && (
-                      <p className="mt-1 text-sm text-red-600">{errors.paidAmount}</p>
-                    )}
-                  </div>
-                </div>
-                <div className="mt-4">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700">Total Price (PKR)</label>
-                      <div className="mt-1 p-2 bg-gray-50 rounded-md">
-                        {Math.round(newProduct.unitPrice * newProduct.quantity)}
-                      </div>
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700">Remaining Amount (PKR)</label>
-                      <div className="mt-1 p-2 bg-gray-50 rounded-md">
-                        {Math.round((newProduct.unitPrice * newProduct.quantity) - newProduct.paidAmount)}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-                <div className="flex justify-end space-x-3 mt-6">
-                  <button
-                    onClick={() => {
-                      setNewProduct({
-                        name: '',
-                        unitPrice: 0,
-                        quantity: 0,
-                        totalPrice: 0,
-                        paidAmount: 0,
-                        remainingAmount: 0
-                      });
-                      setShowNewProductForm(false);
-                    }}
-                    className="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-gray-700 hover:bg-gray-50"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={handleAddProduct}
-                    className="px-4 py-2 bg-blue-600 text-white rounded-md shadow-sm hover:bg-blue-700"
-                  >
-                    Add Product
-                  </button>
-                </div>
-              </div>
-            )}
-
-            <div className="bg-white rounded-lg shadow overflow-hidden">
-              <table className="min-w-full divide-y divide-gray-200">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Product</th>
-                    <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Unit Price (PKR)</th>
-                    <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Quantity</th>
-                    <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Total Price (PKR)</th>
-                    <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Paid Amount (PKR)</th>
-                    <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Remaining Amount (PKR)</th>
-                    <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Actions</th>
+          {/* Table container - Added overflow-y-auto back */}
+          <div className="bg-white rounded-lg shadow overflow-hidden flex-grow overflow-y-auto">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Product</th>
+                  <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Unit Price (PKR)</th>
+                  <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Quantity</th>
+                  <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Total Price (PKR)</th>
+                  <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Paid Amount (PKR)</th>
+                  <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Remaining Amount (PKR)</th>
+                  <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {supplierProducts.map((product) => (
+                  <tr key={product.id} className="hover:bg-gray-50">
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-center">
+                      {product.name || '-'}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-center">
+                      {Math.round(product.unitPrice || 0)}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-center">
+                      {product.quantity || 0}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-center">
+                      {Math.round(product.totalPrice || 0)}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-center">
+                      {Math.round(product.paidAmount || 0)}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-center">
+                      {Math.round(product.remainingAmount || 0)}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-center space-x-2">
+                      <button
+                        onClick={() => {
+                          setSelectedSupplier({ ...selectedSupplier, product });
+                          setPayment({
+                            amount: Math.round(product.remainingAmount || 0),
+                            date: new Date().toISOString().split('T')[0],
+                            description: `Payment for ${product.name || 'product'}`,
+                            paymentMethod: 'Cash',
+                            chequeNumber: ''
+                          });
+                          setShowPaymentModal(true);
+                        }}
+                        className="text-green-600 hover:text-green-800"
+                        title="Pay Remaining Amount"
+                      >
+                        <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                      </button>
+                    </td>
                   </tr>
-                </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
-                  {supplierProducts.map((product) => (
-                    <tr key={product.id} className="hover:bg-gray-50">
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-center">
-                        {product.name || '-'}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-center">
-                        {Math.round(product.unitPrice || 0)}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-center">
-                        {product.quantity || 0}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-center">
-                        {Math.round(product.totalPrice || 0)}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-center">
-                        {Math.round(product.paidAmount || 0)}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-center">
-                        {Math.round(product.remainingAmount || 0)}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-center space-x-2">
-                        <button
-                          onClick={() => {
-                            setSelectedSupplier({ ...selectedSupplier, product });
-                            setPayment({
-                              amount: Math.round(product.remainingAmount || 0),
-                              date: new Date().toISOString().split('T')[0],
-                              description: `Payment for ${product.name || 'product'}`,
-                              paymentMethod: 'Cash',
-                              chequeNumber: ''
-                            });
-                            setShowPaymentModal(true);
-                          }}
-                          className="text-green-600 hover:text-green-800"
-                          title="Pay Remaining Amount"
-                        >
-                          <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                          </svg>
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       )}
@@ -939,6 +935,85 @@ function SupplierManagement() {
                     </tbody>
                   </table>
                 </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add Supplier Modal */}
+      {showAddModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
+            <h3 className="text-lg font-semibold mb-4">Add New Supplier</h3>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Name</label>
+                <input
+                  type="text"
+                  value={newSupplier.name}
+                  onChange={(e) => {
+                    const value = e.target.value.replace(/[0-9]/g, '');
+                    setNewSupplier({ ...newSupplier, name: value });
+                    if (errors.name) {
+                      setErrors(prev => ({ ...prev, name: '' }));
+                    }
+                  }}
+                  maxLength={50}
+                  className={`mt-1 block w-full border rounded-md shadow-sm p-2 ${
+                    errors.name ? 'border-red-500' : 'border-gray-300'
+                  }`}
+                />
+                {errors.name && (
+                  <p className="mt-1 text-sm text-red-600">{errors.name}</p>
+                )}
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Phone</label>
+                <input
+                  type="text"
+                  value={newSupplier.phone}
+                  onChange={(e) => {
+                    const value = e.target.value.replace(/\D/g, '').slice(0, 11);
+                    setNewSupplier({ ...newSupplier, phone: value });
+                    if (errors.phone) {
+                      setErrors(prev => ({ ...prev, phone: '' }));
+                    }
+                  }}
+                  className={`mt-1 block w-full border rounded-md shadow-sm p-2 ${
+                    errors.phone ? 'border-red-500' : 'border-gray-300'
+                  }`}
+                  maxLength={11}
+                />
+                {errors.phone && (
+                  <p className="mt-1 text-sm text-red-600">{errors.phone}</p>
+                )}
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Address</label>
+                <textarea
+                  value={newSupplier.address}
+                  onChange={(e) => setNewSupplier({ ...newSupplier, address: e.target.value })}
+                  className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2"
+                  rows={3}
+                />
+              </div>
+              <div className="flex justify-end space-x-3">
+                <button
+                  onClick={() => {
+                    setShowAddModal(false);
+                    setErrors({});
+                  }}
+                  className="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-gray-700 hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleAddSupplier}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-md shadow-sm hover:bg-blue-700"
+                >
+                  Add Supplier
+                </button>
               </div>
             </div>
           </div>
