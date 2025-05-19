@@ -42,6 +42,8 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
   const filterSales = () => {
     const filtered = sales.filter(sale => {
       const saleDate = new Date(sale.date);
+      console.log("sales selected month: ", selectedMonth)
+      console.log("sales selected Year: ", selectedYear)
       const monthMatch = saleDate.getMonth() === selectedMonth;
       const yearMatch = saleDate.getFullYear() === selectedYear;
       const productMatch = productFilter === '' || 
