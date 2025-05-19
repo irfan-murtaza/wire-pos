@@ -30,106 +30,14 @@ ChartJS.register(
 );
 
 const ProfitLossSummary = () => {
-  const [selectedMonth, setSelectedMonth] = useState(
-    new Date().toISOString().slice(0, 7)
-  );
+  const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth()); // Month is 0-indexed
+  const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [summary, setSummary] = useState({
     totalPurchases: 0,
     totalSales: 0,
     totalMiscPayments: 0,
     netProfit: 0
   });
-
-  const calculateMonthlySummary = async () => {
-    try {
-      // Parse selected month
-      const [year, month] = selectedMonth.split('-').map(Number);
-      const startDate = new Date(year, month - 1, 1);
-      const endDate = new Date(year, month, 0, 23, 59, 59);
-
-      console.log('Querying for period:', {
-        startDate: startDate.toISOString(),
-        endDate: endDate.toISOString()
-      });
-
-      // --- Purchases from suppliers in period ---
-      const purchasesQuery = query(
-        collection(db, 'supplierProducts'),
-        orderBy('createdAt', 'desc')
-      );
-      const purchasesSnap = await getDocs(purchasesQuery);
-      let totalPurchases = 0;
-      purchasesSnap.forEach(doc => {
-        const data = doc.data();
-        const purchaseDate = new Date(data.createdAt);
-        if (purchaseDate >= startDate && purchaseDate <= endDate) {
-          console.log('Purchase data:', data);
-          totalPurchases += parseFloat(data.totalPrice) || 0;
-        }
-      });
-
-      console.log('Total purchases:', totalPurchases);
-
-      // --- Sales Revenue in period -- -
-      const salesQuery = query(
-        collection(db, 'receipts'),
-        orderBy('createdAt', 'desc')
-      );
-      const salesSnap = await getDocs(salesQuery);
-      let totalSales = 0;
-      salesSnap.forEach(doc => {
-        const data = doc.data();
-        const saleDate = new Date(data.createdAt);
-        if (saleDate >= startDate && saleDate <= endDate) {
-          console.log('Sale data:', data);
-          totalSales += parseFloat(data.totalAmount) || 0;
-        }
-      });
-
-      console.log('Total sales:', totalSales);
-
-      // --- Miscellaneous Payments in period ---
-      const miscQuery = query(
-        collection(db, 'miscellaneousPayments'),
-        orderBy('date', 'desc')
-      );
-      const miscSnap = await getDocs(miscQuery);
-      let totalMiscPayments = 0;
-      miscSnap.forEach(doc => {
-        const data = doc.data();
-        const paymentDate = new Date(data.date);
-        if (paymentDate >= startDate && paymentDate <= endDate) {
-          console.log('Misc payment data:', data);
-          totalMiscPayments += parseFloat(data.amount) || 0;
-        }
-      });
-
-      console.log('Total misc payments:', totalMiscPayments);
-
-      // --- Calculate Net Profit ---
-      const netProfit = totalSales - totalPurchases - totalMiscPayments;
-
-      console.log('Final summary:', {
-        totalPurchases,
-        totalSales,
-        totalMiscPayments,
-        netProfit
-      });
-
-      setSummary({
-        totalPurchases: Math.round(totalPurchases),
-        totalSales: Math.round(totalSales),
-        totalMiscPayments: Math.round(totalMiscPayments),
-        netProfit: Math.round(netProfit)
-      });
-    } catch (error) {
-      console.error('Error calculating Profit & Loss:', error);
-    }
-  };
-
-  useEffect(() => {
-    calculateMonthlySummary();
-  }, [selectedMonth]);
 
   const formatCurrency = amount =>
     new Intl.NumberFormat('en-PK', {
@@ -205,18 +113,172 @@ const ProfitLossSummary = () => {
     }
   };
 
+  const totalSaleValue = async () => {
+    try {
+      const salesQuery = query(collection(db, 'receipts'), orderBy('date', 'desc'));
+      const querySnapshot = await getDocs(salesQuery);
+      const salesList = querySnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+
+      const filtered = salesList.filter(sale => {
+        const saleDate = new Date(sale.date);
+        console.log("month: ", selectedMonth )
+        console.log("month: ", selectedYear)
+        const monthMatch = saleDate.getMonth() === selectedMonth;
+        const yearMatch = saleDate.getFullYear() === selectedYear;
+        
+        return monthMatch && yearMatch
+      });
+      return filtered.reduce((sum, sale) => sum + (sale.totalAmount || 0), 0);
+
+    } catch (error) {
+      console.error('Error fetching sales:', error);
+      alert('Error fetching sales. Please check console for details.');
+    }
+    
+  };
+
+  const months = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'
+  ];
+
+  const years = Array.from({ length: 10 }, (_, i) => new Date().getFullYear() - i);
+
+  const calculateMonthlySummary = async () => {
+    try {
+      // Parse selected month and year
+      const year = selectedYear; // Use selectedYear state
+      const month = selectedMonth; // Use selectedMonth state (0-indexed)
+      const startDate = new Date(year, month, 1); // Corrected to use 0-indexed month
+      const endDate = new Date(year, month + 1, 0, 23, 59, 59); // Corrected to use 0-indexed month + 1 for end of month
+
+      // Convert dates to Firestore Timestamps for Timestamp fields
+      const startTimestamp = Timestamp.fromDate(startDate);
+      const endTimestamp = Timestamp.fromDate(endDate);
+
+      console.log('Querying for period:', {
+        startDate: startDate.toISOString(),
+        endDate: endDate.toISOString(),
+        startTimestamp: startTimestamp.toDate(),
+        endTimestamp: endTimestamp.toDate()
+      });
+
+      // --- Purchases from suppliers in period ---
+      const purchasesQuery = query(
+        collection(db, 'supplierProducts'),
+        where('createdAt', '>=', startTimestamp), // Filter by date range on Timestamp
+        where('createdAt', '<=', endTimestamp),
+        orderBy('createdAt', 'desc')
+      );
+      const purchasesSnap = await getDocs(purchasesQuery);
+      let totalPurchases = 0;
+      console.log(`Fetched ${purchasesSnap.docs.length} purchase documents for ${selectedMonth}`);
+      purchasesSnap.forEach(doc => {
+        const data = doc.data();
+        console.log('Purchase data:', data);
+        totalPurchases += parseFloat(data.totalPrice || 0) || 0;
+      });
+
+      console.log('Total purchases:', totalPurchases);
+
+      // --- Sales Revenue in period -- -
+      const salesQuery = query(
+        collection(db, 'receipts'),
+        where('createdAt', '>=', startTimestamp), // Filter by date range on Timestamp
+        where('createdAt', '<=', endTimestamp),
+        orderBy('createdAt', 'desc')
+      );
+      const salesSnap = await getDocs(salesQuery);
+      let totalSales = 0;
+      console.log(`Fetched ${salesSnap.docs.length} sales documents for ${selectedMonth}`);
+      const fetchedSalesData = [];
+      salesSnap.forEach(doc => {
+        const data = doc.data();
+        fetchedSalesData.push(data);
+        totalSales += parseFloat(data.totalAmount || 0) || 0;
+      });
+
+      console.log('Total sales:', totalSales);
+      console.log('Fetched sales data:', fetchedSalesData);
+
+      // --- Miscellaneous Payments in period ---
+      const miscQuery = query(
+        collection(db, 'miscellaneousPayments'),
+        orderBy('date', 'desc') // Fetch all or potentially filter by year if index exists
+      );
+      const miscSnap = await getDocs(miscQuery);
+      let totalMiscPayments = 0;
+      const fetchedMiscData = [];
+      miscSnap.docs.forEach(doc => {
+        const data = doc.data();
+        const paymentDate = new Date(data.date); // Assuming date is stored as a parseable string
+        // Client-side filter by month and year
+        if (paymentDate >= startDate && paymentDate <= endDate) {
+           console.log('Misc payment data (filtered client-side):', data);
+           fetchedMiscData.push(data);
+           totalMiscPayments += parseFloat(data.amount || 0) || 0;
+        }
+      });
+       console.log(`Fetched ${fetchedMiscData.length} miscellaneous payment documents for ${selectedMonth} (after client-side filter)`); // Log filtered misc count
+      console.log('Total misc payments:', totalMiscPayments);
+       console.log('Fetched miscellaneous payments data (filtered client-side):', fetchedMiscData); // Log the filtered data array
+
+
+      // --- Calculate Net Profit ---
+      const netProfit = totalSales - totalPurchases - totalMiscPayments;
+
+      const total = await totalSaleValue()
+      console.log('Final summary:', {
+        totalPurchases,
+        total,
+        totalMiscPayments,
+        netProfit
+      });
+
+      setSummary({
+        totalPurchases: Math.round(totalPurchases),
+        totalSales: Math.round(total),
+        totalMiscPayments: Math.round(totalMiscPayments),
+        netProfit: Math.round(netProfit)
+      });
+    } catch (error) {
+      console.error('Error calculating Profit & Loss:', error);
+    }
+  };
+
+  useEffect(() => {
+    calculateMonthlySummary();
+  }, [selectedMonth, selectedYear]); // Trigger recalculation when month or year changes
+
   return (
     <div className="space-y-6">
       <h2 className="text-2xl font-bold">Profit & Loss Summary</h2>
 
       <div className="space-y-2">
         <label className="block text-sm font-medium">Select Month:</label>
-        <input
-          type="month"
-          className="block w-48 rounded-md border-gray-300 shadow-sm"
-          value={selectedMonth}
-          onChange={e => setSelectedMonth(e.target.value)}
-        />
+        <div className="flex gap-4">
+          <select
+            className="block w-48 rounded-md border-gray-300 shadow-sm"
+            value={selectedMonth}
+            onChange={e => setSelectedMonth(Number(e.target.value))}
+          >
+            {months.map((monthName, index) => (
+              <option key={index} value={index}>{monthName}</option>
+            ))}
+          </select>
+          <select
+            className="block w-48 rounded-md border-gray-300 shadow-sm"
+            value={selectedYear}
+            onChange={e => setSelectedYear(Number(e.target.value))}
+          >
+            {years.map(year => (
+              <option key={year} value={year}>{year}</option>
+            ))}
+          </select>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
