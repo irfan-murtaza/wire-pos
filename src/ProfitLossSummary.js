@@ -30,9 +30,7 @@ ChartJS.register(
 );
 
 const ProfitLossSummary = () => {
-  const [selectedMonth, setSelectedMonth] = useState(
-    new Date().toISOString().slice(0, 7)
-  );
+  const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth()); // Month is 0-indexed
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [summary, setSummary] = useState({
     totalPurchases: 0,
@@ -142,12 +140,20 @@ const ProfitLossSummary = () => {
     
   };
 
+  const months = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'
+  ];
+
+  const years = Array.from({ length: 10 }, (_, i) => new Date().getFullYear() - i);
+
   const calculateMonthlySummary = async () => {
     try {
       // Parse selected month and year
-      const [year, month] = selectedMonth.split('-').map(Number);
-      const startDate = new Date(year, month - 1, 1);
-      const endDate = new Date(year, month, 0, 23, 59, 59);
+      const year = selectedYear; // Use selectedYear state
+      const month = selectedMonth; // Use selectedMonth state (0-indexed)
+      const startDate = new Date(year, month, 1); // Corrected to use 0-indexed month
+      const endDate = new Date(year, month + 1, 0, 23, 59, 59); // Corrected to use 0-indexed month + 1 for end of month
 
       // Convert dates to Firestore Timestamps for Timestamp fields
       const startTimestamp = Timestamp.fromDate(startDate);
@@ -253,12 +259,26 @@ const ProfitLossSummary = () => {
 
       <div className="space-y-2">
         <label className="block text-sm font-medium">Select Month:</label>
-        <input
-          type="month"
-          className="block w-48 rounded-md border-gray-300 shadow-sm"
-          value={selectedMonth}
-          onChange={e => setSelectedMonth(e.target.value)}
-        />
+        <div className="flex gap-4">
+          <select
+            className="block w-48 rounded-md border-gray-300 shadow-sm"
+            value={selectedMonth}
+            onChange={e => setSelectedMonth(Number(e.target.value))}
+          >
+            {months.map((monthName, index) => (
+              <option key={index} value={index}>{monthName}</option>
+            ))}
+          </select>
+          <select
+            className="block w-48 rounded-md border-gray-300 shadow-sm"
+            value={selectedYear}
+            onChange={e => setSelectedYear(Number(e.target.value))}
+          >
+            {years.map(year => (
+              <option key={year} value={year}>{year}</option>
+            ))}
+          </select>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
