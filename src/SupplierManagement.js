@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { collection, addDoc, getDocs, query, orderBy, doc, updateDoc, where } from 'firebase/firestore';
 import { db } from './firebase';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
 function SupplierManagement() {
   const [suppliers, setSuppliers] = useState([]);
@@ -477,6 +479,71 @@ function SupplierManagement() {
     setShowDetailsModal(true);
   };
 
+  // Download supplier details as PDF
+  const handleDownloadSupplier = async (supplier) => {
+    // Fetch product and payment history
+    const productsQuery = query(collection(db, 'supplierProducts'), where('supplierId', '==', supplier.id), orderBy('createdAt', 'desc'));
+    const productsSnapshot = await getDocs(productsQuery);
+    const productsList = productsSnapshot.docs.map(doc => doc.data());
+
+    const paymentsQuery = query(collection(db, 'supplierPayments'), where('supplierId', '==', supplier.id), orderBy('date', 'desc'));
+    const paymentsSnapshot = await getDocs(paymentsQuery);
+    const paymentsList = paymentsSnapshot.docs.map(doc => doc.data());
+
+    // Create PDF
+    const docPdf = new jsPDF();
+    docPdf.setFontSize(16);
+    docPdf.text(`Supplier Report: ${supplier.names || supplier.name}`, 14, 15);
+    docPdf.setFontSize(12);
+    docPdf.text(`Phone: ${supplier.phone || ''}`, 14, 25);
+    docPdf.text(`Address: ${supplier.address || ''}`, 14, 32);
+    docPdf.text(`Total Amount: Rs ${supplier.totalAmount}`, 14, 40);
+    docPdf.text(`Paid Amount: Rs ${supplier.paidAmount}`, 14, 47);
+    docPdf.text(`Remaining Amount: Rs ${supplier.remainingAmount}`, 14, 54);
+
+    // Product History Table
+    docPdf.setFontSize(13);
+    docPdf.text('Product History', 14, 65);
+    autoTable(docPdf, {
+      startY: 70,
+      head: [[
+        'Product', 'Unit Price', 'Quantity', 'Total Price', 'Paid Amount', 'Remaining Amount', 'Date'
+      ]],
+      body: productsList.map(product => [
+        product.name,
+        product.unitPrice,
+        product.quantity,
+        product.totalPrice,
+        product.paidAmount,
+        product.remainingAmount,
+        product.createdAt ? new Date(product.createdAt).toLocaleDateString() : ''
+      ]),
+      styles: { fontSize: 8 },
+      headStyles: { fillColor: [41, 128, 185] },
+    });
+
+    // Payment History Table
+    let paymentTableStartY = docPdf.lastAutoTable ? docPdf.lastAutoTable.finalY + 10 : 90;
+    docPdf.setFontSize(13);
+    docPdf.text('Payment History', 14, paymentTableStartY);
+    autoTable(docPdf, {
+      startY: paymentTableStartY + 5,
+      head: [[
+        'Date', 'Amount', 'Method', 'Description'
+      ]],
+      body: paymentsList.map(payment => [
+        payment.date ? new Date(payment.date).toLocaleDateString() : '',
+        payment.amount,
+        payment.paymentMethod + (payment.chequeNumber ? ` (${payment.chequeNumber})` : ''),
+        payment.description
+      ]),
+      styles: { fontSize: 8 },
+      headStyles: { fillColor: [41, 128, 185] },
+    });
+
+    docPdf.save(`supplier_report_${supplier.names || supplier.name}.pdf`);
+  };
+
   return (
     <div className="space-y-6">
       {showSuccess && (
@@ -566,6 +633,15 @@ function SupplierManagement() {
                     >
                       <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                      </svg>
+                    </button>
+                    <button
+                      onClick={() => handleDownloadSupplier(supplierGroup)}
+                      className="text-green-600 hover:text-green-800"
+                      title="Download Supplier Report"
+                    >
+                      <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                       </svg>
                     </button>
                   </td>
