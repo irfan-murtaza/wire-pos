@@ -153,6 +153,12 @@ export function generatePrintableHTML({
             <p><strong>Phone:</strong> ${customerPhone || '-'}</p>
           </div>
 
+          ${(paymentMethod === 'Manual Debt' && remainingAmount > 0) ? `
+            <div style="margin-bottom: 16px; padding: 12px; background: #fff3cd; border: 1px solid #ffeeba; border-radius: 4px; color: #856404;">
+              <strong>Pending Payment:</strong> This is a pending payment${comment ? `.<br/><strong>Reason:</strong> ${comment}` : '.'}
+            </div>
+          ` : ''}
+
           <table>
             <thead>
               <tr>
