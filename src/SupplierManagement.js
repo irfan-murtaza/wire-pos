@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { collection, addDoc, getDocs, query, orderBy, doc, updateDoc, where } from 'firebase/firestore';
 import { db } from './firebase';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
 function SupplierManagement() {
   const [suppliers, setSuppliers] = useState([]);
@@ -38,6 +40,11 @@ function SupplierManagement() {
     payments: [],
     products: []
   });
+  const [overallTotals, setOverallTotals] = useState({
+    totalPurchase: 0,
+    totalPaid: 0,
+    totalRemaining: 0,
+  });
 
   useEffect(() => {
     fetchSuppliers();
@@ -52,36 +59,75 @@ function SupplierManagement() {
         ...doc.data()
       }));
 
-      // Group suppliers by phone number and aggregate data
-      const groupedSuppliers = suppliersData.reduce((acc, supplier) => {
-        if (!acc[supplier.phone]) {
-          acc[supplier.phone] = {
-            phone: supplier.phone,
-            names: new Set(),
-            totalAmount: 0,
-            paidAmount: 0,
-            remainingAmount: 0,
-            // Assuming one address per phone or showing the first one
-            address: supplier.address,
-            // Store IDs to access for actions later, using the first one for simplicity
-            id: supplier.id,
-          };
-        }
-        acc[supplier.phone].names.add(supplier.name.trim()); // Add distinct names
-        acc[supplier.phone].totalAmount += supplier.balance; // Sum total amounts
-        acc[supplier.phone].paidAmount += supplier.balance; // Sum paid amounts
-        acc[supplier.phone].remainingAmount += supplier.balance; // Sum remaining amounts (balance)
-        return acc;
-      }, {});
-
-      // Convert grouped object back to an array and format names
-      const groupedSuppliersList = Object.values(groupedSuppliers).map(group => ({
-        ...group,
-        names: Array.from(group.names).join(', '),
-        remainingAmount: Math.round(group.remainingAmount)
+      // Fetch all supplier products and payments
+      const productsSnapshot = await getDocs(collection(db, 'supplierProducts'));
+      const productsData = productsSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
       }));
 
-      setSuppliers(groupedSuppliersList);
+      const paymentsSnapshot = await getDocs(collection(db, 'supplierPayments'));
+      const paymentsData = paymentsSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+
+      // Aggregate data by supplier ID
+      const aggregatedSuppliers = {};
+
+      suppliersData.forEach(supplier => {
+        aggregatedSuppliers[supplier.id] = {
+          id: supplier.id,
+          name: supplier.name,
+          phone: supplier.phone,
+          address: supplier.address,
+          totalAmount: 0,
+          paidAmount: 0,
+          remainingAmount: 0,
+        };
+      });
+
+      productsData.forEach(product => {
+        if (aggregatedSuppliers[product.supplierId]) {
+          aggregatedSuppliers[product.supplierId].totalAmount += parseFloat(product.totalPrice || 0);
+        }
+      });
+
+      paymentsData.forEach(payment => {
+        if (aggregatedSuppliers[payment.supplierId]) {
+           // Add payment amount to paidAmount, and deduct from remainingAmount
+           aggregatedSuppliers[payment.supplierId].paidAmount += parseFloat(payment.amount || 0);
+        }
+      });
+
+
+      // Calculate remaining amount and format names
+      const finalSuppliersList = Object.values(aggregatedSuppliers).map(supplier => {
+         const totalPaid = supplier.paidAmount; // Sum of paid amounts from products and payments
+         const totalOwed = supplier.totalAmount; // Sum of total prices from products
+         const remaining = totalOwed - totalPaid;
+         return {
+           ...supplier,
+           totalAmount: Math.round(totalOwed),
+           paidAmount: Math.round(totalPaid),
+           remainingAmount: Math.round(remaining),
+           // Assuming one name per supplier ID or taking the first one
+           names: supplier.name // Use the name from the supplier document for simplicity
+         };
+      });
+
+
+      setSuppliers(finalSuppliersList);
+
+      // Calculate overall totals
+      const overallTotals = finalSuppliersList.reduce((acc, supplier) => {
+        acc.totalPurchase += supplier.totalAmount;
+        acc.totalPaid += supplier.paidAmount;
+        acc.totalRemaining += supplier.remainingAmount;
+        return acc;
+      }, { totalPurchase: 0, totalPaid: 0, totalRemaining: 0 });
+
+      setOverallTotals(overallTotals);
     } catch (error) {
       console.error('Error fetching suppliers:', error);
       alert('Error fetching suppliers. Please check console for details.');
@@ -102,7 +148,33 @@ function SupplierManagement() {
         remainingAmount: Math.round(doc.data().remainingAmount || 0),
         // unit: doc.data().unit || '' // Removed unit from fetch
       }));
-      setSupplierProducts(productsList);
+
+      // Group products by name and unit price
+      const groupedProducts = productsList.reduce((acc, product) => {
+        const key = `${product.name}-${product.unitPrice}`;
+        if (!acc[key]) {
+          acc[key] = {
+            id: key, // Use a composite key for grouping
+            name: product.name,
+            unitPrice: product.unitPrice,
+            quantity: 0,
+            totalPrice: 0,
+            paidAmount: 0,
+            remainingAmount: 0,
+            originalProducts: [], // Keep track of original product IDs if needed later
+          };
+        }
+        acc[key].quantity += product.quantity;
+        acc[key].totalPrice += product.totalPrice;
+        acc[key].paidAmount += product.paidAmount;
+        acc[key].remainingAmount += product.remainingAmount;
+        acc[key].originalProducts.push(product); // Store original products
+        return acc;
+      }, {});
+
+      const groupedProductsList = Object.values(groupedProducts);
+
+      setSupplierProducts(groupedProductsList);
     } catch (error) {
       console.error('Error fetching supplier products:', error);
       alert('Error fetching supplier products. Please check console for details.');
@@ -361,7 +433,11 @@ function SupplierManagement() {
       });
 
       // Update product's paid amount and remaining amount
-      const productDoc = doc(db, 'supplierProducts', selectedSupplier.product.id);
+      let productDocId = selectedSupplier.product.id;
+      if (selectedSupplier.product.originalProducts && selectedSupplier.product.originalProducts.length > 0) {
+        productDocId = selectedSupplier.product.originalProducts[0].id;
+      }
+      const productDoc = doc(db, 'supplierProducts', productDocId);
       const newPaidAmount = Math.round((selectedSupplier.product.paidAmount || 0) + paymentAmount);
       const newRemainingAmount = Math.round(selectedSupplier.product.totalPrice - newPaidAmount);
       
@@ -403,6 +479,71 @@ function SupplierManagement() {
     setShowDetailsModal(true);
   };
 
+  // Download supplier details as PDF
+  const handleDownloadSupplier = async (supplier) => {
+    // Fetch product and payment history
+    const productsQuery = query(collection(db, 'supplierProducts'), where('supplierId', '==', supplier.id), orderBy('createdAt', 'desc'));
+    const productsSnapshot = await getDocs(productsQuery);
+    const productsList = productsSnapshot.docs.map(doc => doc.data());
+
+    const paymentsQuery = query(collection(db, 'supplierPayments'), where('supplierId', '==', supplier.id), orderBy('date', 'desc'));
+    const paymentsSnapshot = await getDocs(paymentsQuery);
+    const paymentsList = paymentsSnapshot.docs.map(doc => doc.data());
+
+    // Create PDF
+    const docPdf = new jsPDF();
+    docPdf.setFontSize(16);
+    docPdf.text(`Supplier Report: ${supplier.names || supplier.name}`, 14, 15);
+    docPdf.setFontSize(12);
+    docPdf.text(`Phone: ${supplier.phone || ''}`, 14, 25);
+    docPdf.text(`Address: ${supplier.address || ''}`, 14, 32);
+    docPdf.text(`Total Amount: Rs ${supplier.totalAmount}`, 14, 40);
+    docPdf.text(`Paid Amount: Rs ${supplier.paidAmount}`, 14, 47);
+    docPdf.text(`Remaining Amount: Rs ${supplier.remainingAmount}`, 14, 54);
+
+    // Product History Table
+    docPdf.setFontSize(13);
+    docPdf.text('Product History', 14, 65);
+    autoTable(docPdf, {
+      startY: 70,
+      head: [[
+        'Product', 'Unit Price', 'Quantity', 'Total Price', 'Paid Amount', 'Remaining Amount', 'Date'
+      ]],
+      body: productsList.map(product => [
+        product.name,
+        product.unitPrice,
+        product.quantity,
+        product.totalPrice,
+        product.paidAmount,
+        product.remainingAmount,
+        product.createdAt ? new Date(product.createdAt).toLocaleDateString() : ''
+      ]),
+      styles: { fontSize: 8 },
+      headStyles: { fillColor: [41, 128, 185] },
+    });
+
+    // Payment History Table
+    let paymentTableStartY = docPdf.lastAutoTable ? docPdf.lastAutoTable.finalY + 10 : 90;
+    docPdf.setFontSize(13);
+    docPdf.text('Payment History', 14, paymentTableStartY);
+    autoTable(docPdf, {
+      startY: paymentTableStartY + 5,
+      head: [[
+        'Date', 'Amount', 'Method', 'Description'
+      ]],
+      body: paymentsList.map(payment => [
+        payment.date ? new Date(payment.date).toLocaleDateString() : '',
+        payment.amount,
+        payment.paymentMethod + (payment.chequeNumber ? ` (${payment.chequeNumber})` : ''),
+        payment.description
+      ]),
+      styles: { fontSize: 8 },
+      headStyles: { fillColor: [41, 128, 185] },
+    });
+
+    docPdf.save(`supplier_report_${supplier.names || supplier.name}.pdf`);
+  };
+
   return (
     <div className="space-y-6">
       {showSuccess && (
@@ -419,6 +560,22 @@ function SupplierManagement() {
         >
           Add Supplier
         </button>
+      </div>
+
+      {/* Overall Summary */}
+      <div className="bg-white rounded-lg shadow p-6 grid grid-cols-3 gap-4 text-center">
+        <div>
+          <p className="text-sm font-medium text-gray-500">Total Purchase Amount (PKR)</p>
+          <p className="mt-1 text-lg font-semibold text-gray-900">{overallTotals.totalPurchase}</p>
+        </div>
+        <div>
+          <p className="text-sm font-medium text-gray-500">Total Paid Amount (PKR)</p>
+          <p className="mt-1 text-lg font-semibold text-green-600">{overallTotals.totalPaid}</p>
+        </div>
+        <div>
+          <p className="text-sm font-medium text-gray-500">Total Remaining Amount (PKR)</p>
+          <p className="mt-1 text-lg font-semibold text-red-600">{overallTotals.totalRemaining}</p>
+        </div>
       </div>
 
       {/* Conditionally render supplier list or product details */}
@@ -476,6 +633,15 @@ function SupplierManagement() {
                     >
                       <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                      </svg>
+                    </button>
+                    <button
+                      onClick={() => handleDownloadSupplier(supplierGroup)}
+                      className="text-green-600 hover:text-green-800"
+                      title="Download Supplier Report"
+                    >
+                      <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                       </svg>
                     </button>
                   </td>

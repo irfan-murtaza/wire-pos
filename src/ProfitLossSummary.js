@@ -30,6 +30,7 @@ ChartJS.register(
 );
 
 const ProfitLossSummary = () => {
+  const [suppliers, setSuppliers] = useState([]);
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth()); // Month is 0-indexed
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [summary, setSummary] = useState({
@@ -38,6 +39,104 @@ const ProfitLossSummary = () => {
     totalMiscPayments: 0,
     netProfit: 0
   });
+  const [overallTotals, setOverallTotals] = useState({
+    totalPurchase: 0,
+    totalPaid: 0,
+    totalRemaining: 0,
+  });
+
+  useEffect(() => {
+    fetchSuppliers();
+  }, []);
+
+  const fetchSuppliers = async () => {
+    try {
+      const suppliersQuery = query(collection(db, 'suppliers'), orderBy('name'));
+      const querySnapshot = await getDocs(suppliersQuery);
+      const suppliersData = querySnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+
+      // Fetch all supplier products and payments
+      const productsSnapshot = await getDocs(collection(db, 'supplierProducts'));
+      const productsData = productsSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+
+      const paymentsSnapshot = await getDocs(collection(db, 'supplierPayments'));
+      const paymentsData = paymentsSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+
+      // Aggregate data by supplier ID
+      const aggregatedSuppliers = {};
+
+      suppliersData.forEach(supplier => {
+        aggregatedSuppliers[supplier.id] = {
+          id: supplier.id,
+          name: supplier.name,
+          phone: supplier.phone,
+          address: supplier.address,
+          totalAmount: 0,
+          paidAmount: 0,
+          remainingAmount: 0,
+        };
+      });
+
+      productsData.forEach(product => {
+        if (aggregatedSuppliers[product.supplierId]) {
+          aggregatedSuppliers[product.supplierId].totalAmount += parseFloat(product.totalPrice || 0);
+        }
+      });
+
+      paymentsData.forEach(payment => {
+        if (aggregatedSuppliers[payment.supplierId]) {
+           // Add payment amount to paidAmount, and deduct from remainingAmount
+           aggregatedSuppliers[payment.supplierId].paidAmount += parseFloat(payment.amount || 0);
+        }
+      });
+
+
+      // Calculate remaining amount and format names
+      const finalSuppliersList = Object.values(aggregatedSuppliers).map(supplier => {
+         const totalPaid = supplier.paidAmount; // Sum of paid amounts from products and payments
+         const totalOwed = supplier.totalAmount; // Sum of total prices from products
+         const remaining = totalOwed - totalPaid;
+         return {
+           ...supplier,
+           totalAmount: Math.round(totalOwed),
+           paidAmount: Math.round(totalPaid),
+           remainingAmount: Math.round(remaining),
+           // Assuming one name per supplier ID or taking the first one
+           names: supplier.name // Use the name from the supplier document for simplicity
+         };
+      });
+
+
+      setSuppliers(finalSuppliersList);
+
+      // Calculate overall totals
+      const overallTotals = finalSuppliersList.reduce((acc, supplier) => {
+        acc.totalPurchase += supplier.totalAmount;
+        acc.totalPaid += supplier.paidAmount;
+        acc.totalRemaining += supplier.remainingAmount;
+        return acc;
+      }, { totalPurchase: 0, totalPaid: 0, totalRemaining: 0 });
+
+      setOverallTotals(overallTotals);
+    } catch (error) {
+      console.error('Error fetching suppliers:', error);
+      alert('Error fetching suppliers. Please check console for details.');
+    }
+  };
+
+
+
+
+
 
   const formatCurrency = amount =>
     new Intl.NumberFormat('en-PK', {
@@ -54,7 +153,7 @@ const ProfitLossSummary = () => {
       {
         label: 'Amount (PKR)',
         data: [
-          summary.totalPurchases,
+          overallTotals.totalPurchase,
           summary.totalMiscPayments,
           summary.totalSales,
           summary.netProfit
@@ -182,7 +281,6 @@ const ProfitLossSummary = () => {
         totalPurchases += parseFloat(data.totalPrice || 0) || 0;
       });
 
-      console.log('Total purchases:', totalPurchases);
 
       // --- Sales Revenue in period -- -
       const salesQuery = query(
@@ -288,7 +386,7 @@ const ProfitLossSummary = () => {
               <tr>
                 <td className="px-3 py-4 text-sm">Total Purchases</td>
                 <td className="px-3 py-4 text-sm text-right text-red-600">
-                  ({formatCurrency(summary.totalPurchases)})
+                  ({formatCurrency(overallTotals.totalPurchase)})
                 </td>
               </tr>
               <tr>
