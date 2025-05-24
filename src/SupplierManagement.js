@@ -88,7 +88,6 @@ function SupplierManagement() {
       productsData.forEach(product => {
         if (aggregatedSuppliers[product.supplierId]) {
           aggregatedSuppliers[product.supplierId].totalAmount += parseFloat(product.totalPrice || 0);
-          aggregatedSuppliers[product.supplierId].paidAmount += parseFloat(product.paidAmount || 0); // Assuming paidAmount is stored per product initially
         }
       });
 
@@ -432,7 +431,11 @@ function SupplierManagement() {
       });
 
       // Update product's paid amount and remaining amount
-      const productDoc = doc(db, 'supplierProducts', selectedSupplier.product.id);
+      let productDocId = selectedSupplier.product.id;
+      if (selectedSupplier.product.originalProducts && selectedSupplier.product.originalProducts.length > 0) {
+        productDocId = selectedSupplier.product.originalProducts[0].id;
+      }
+      const productDoc = doc(db, 'supplierProducts', productDocId);
       const newPaidAmount = Math.round((selectedSupplier.product.paidAmount || 0) + paymentAmount);
       const newRemainingAmount = Math.round(selectedSupplier.product.totalPrice - newPaidAmount);
       

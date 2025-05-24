@@ -89,7 +89,6 @@ const ProfitLossSummary = () => {
       productsData.forEach(product => {
         if (aggregatedSuppliers[product.supplierId]) {
           aggregatedSuppliers[product.supplierId].totalAmount += parseFloat(product.totalPrice || 0);
-          aggregatedSuppliers[product.supplierId].paidAmount += parseFloat(product.paidAmount || 0); // Assuming paidAmount is stored per product initially
         }
       });
 
