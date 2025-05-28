@@ -124,7 +124,8 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
         discount: sale.discount || 0,
         discountAmount: sale.discountAmount || 0,
         subtotal: sale.totalAmount + (sale.discountAmount || 0),
-        paymentHistory: paymentHistory
+        paymentHistory: paymentHistory,
+        billNumber: sale.billNumber
       });
     
       const printWindow = window.open('', '_blank', 'width=800,height=600');
@@ -250,6 +251,7 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
       const customerInfo = `${sale.customerName}\n${sale.customerPhone || '-'}`;
 
       return [
+        sale.billNumber || '-',
         formatDate(sale.date),
         customerInfo,
         paymentInfo,
@@ -261,7 +263,7 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
     // Add main table
     autoTable(doc, {
       startY: yPos + 30,
-      head: [['Date', 'Customer', 'Payment', 'Total', 'Items (Qty: Unit Price in PKR)']],
+      head: [['Bill No', 'Date', 'Customer', 'Payment', 'Total', 'Items (Qty: Unit Price in PKR)']],
       body: tableData,
       theme: 'grid',
       headStyles: { fillColor: [41, 128, 185] },
@@ -269,9 +271,10 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
       columnStyles: {
         0: { cellWidth: 20 },
         1: { cellWidth: 30 },
-        2: { cellWidth: 20 },
-        3: { cellWidth: 15 },
-        4: { cellWidth: 40, cellPadding: 2 }
+        2: { cellWidth: 30 },
+        3: { cellWidth: 20 },
+        4: { cellWidth: 15 },
+        5: { cellWidth: 40, cellPadding: 2 }
       }
     });
 
@@ -383,6 +386,7 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
         <table className="min-w-full divide-y divide-gray-200">
           <thead className="bg-gray-50">
             <tr>
+              <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Bill No</th>
               <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Date</th>
               <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Customer</th>
               <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Payment</th>
@@ -393,6 +397,7 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
           <tbody className="bg-white divide-y divide-gray-200">
             {filteredSales.map((sale) => (
               <tr key={sale.id} className="hover:bg-gray-50">
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-center">{sale.billNumber || '-'}</td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-center">
                   {formatDate(sale.date)}
                 </td>

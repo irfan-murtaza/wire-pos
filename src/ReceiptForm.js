@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { collection, addDoc } from 'firebase/firestore';
+import { collection, addDoc, query, orderBy, getDocs } from 'firebase/firestore';
 import { db } from './firebase';
 import { generatePrintableHTML } from './PrintableReceipt';
 import { useRef } from 'react';
@@ -180,7 +180,15 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
 
     try {
       const initialPayment = isPartialPayment ? paidAmount : total;
-      
+      // Fetch the current max bill number
+      const receiptsQuery = query(collection(db, 'receipts'), orderBy('billNumber', 'desc'));
+      const receiptsSnapshot = await getDocs(receiptsQuery);
+      let maxBillNumber = 0;
+      if (!receiptsSnapshot.empty) {
+        const firstDoc = receiptsSnapshot.docs[0];
+        maxBillNumber = firstDoc.data().billNumber || 0;
+      }
+      const newBillNumber = maxBillNumber + 1;
       // Create the receipt data
       const receiptData = {
         customerName,
@@ -201,7 +209,8 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
         discount: showDiscount ? discount : 0,
         discountAmount: showDiscount ? discountAmount : 0,
         subtotal,
-        isDebt: isPartialPayment && (total - paidAmount) > 0
+        isDebt: isPartialPayment && (total - paidAmount) > 0,
+        billNumber: newBillNumber
       };
 
       // Add the receipt to Firestore
