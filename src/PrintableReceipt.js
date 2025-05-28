@@ -84,88 +84,248 @@ export function generatePrintableHTML({
         <title>Receipt</title>
         <style>
           body {
-            font-family: Arial, sans-serif;
+            font-family: 'Inter', Arial, sans-serif;
             margin: 0;
-            padding: 20px;
+            padding: 0;
+            background: #f4f7fa;
+            color: #222;
           }
           .receipt {
-            max-width: 800px;
-            margin: 0 auto;
+            max-width: 700px;
+            margin: 32px auto;
+            background: #fff;
+            border-radius: 18px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.10), 0 1.5px 4px rgba(0,86,166,0.08);
+            overflow: hidden;
+            border: none;
           }
-          .header {
+          .aaf-header {
+            background: linear-gradient(90deg, #0056a6 0%, #0072ce 100%);
+            color: #fff;
+            padding: 32px 0 18px 0;
             text-align: center;
-            margin-bottom: 20px;
+            border-bottom: 4px solid #ff9900;
+            position: relative;
+          }
+          .aaf-header h1 {
+            margin: 0 0 8px 0;
+            font-size: 2.3em;
+            letter-spacing: 2.5px;
+            font-weight: 800;
+            color: #ff9900;
+            text-shadow: 0 2px 8px rgba(0,0,0,0.10);
+          }
+          .aaf-header .address {
+            font-size: 1.13em;
+            color: #fff;
+            margin-bottom: 10px;
+            font-weight: 500;
+            letter-spacing: 0.5px;
+          }
+          .aaf-header .contacts-table {
+            width: 90%;
+            margin: 0 auto 0 auto;
+            border-collapse: collapse;
+          }
+          .aaf-header .contacts-table td {
+            color: #fff;
+            font-size: 1.08em;
+            font-weight: 600;
+            padding: 0 18px 0 18px;
+            text-align: center;
+            border: none;
+          }
+          .receipt-date {
+            text-align: center;
+            font-size: 1.13em;
+            color: #0056a6;
+            margin: 24px 0 0 0;
+            font-weight: 600;
+            letter-spacing: 0.5px;
           }
           .customer-info {
-            margin-bottom: 20px;
+            margin: 12px 0 18px 0;
+            padding: 0 32px;
+            font-size: 1.13em;
+            background: #f7fafd;
+            border-radius: 10px;
+            box-shadow: 0 1px 4px rgba(0,86,166,0.04);
+            display: flex;
+            flex-direction: row;
+            justify-content: space-between;
+            align-items: center;
           }
-          table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-bottom: 20px;
+          .customer-info strong {
+            color: #0056a6;
+            font-weight: 700;
           }
-          th, td {
-            border: 1px solid #ddd;
-            padding: 8px;
-            text-align: left;
+          .receipt-table {
+            width: 94%;
+            margin: 0 auto 24px auto;
+            border-collapse: separate;
+            border-spacing: 0;
+            font-size: 1.09em;
+            background: #f9fbfd;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 1px 4px rgba(0,86,166,0.04);
           }
-          th {
-            background-color: #f5f5f5;
+          .receipt-table th {
+            background: linear-gradient(90deg, #0056a6 0%, #0072ce 100%);
+            color: #ff9900;
+            border: none;
+            padding: 12px 4px;
+            font-weight: 700;
+            text-align: center;
+            font-size: 1.08em;
+            letter-spacing: 0.5px;
+          }
+          .receipt-table td {
+            border: none;
+            border-bottom: 1.5px solid #e3eaf3;
+            padding: 10px 4px;
+            text-align: center;
+            background: #fff;
+            font-size: 1.07em;
+          }
+          .receipt-table tr:last-child td {
+            border-bottom: none;
+          }
+          .receipt-table tr:nth-child(even) td {
+            background: #f4f7fa;
           }
           .total-section {
-            margin-top: 20px;
+            margin: 0 32px 18px 32px;
+            font-size: 1.13em;
+            background: #f7fafd;
+            border-radius: 10px;
+            padding: 18px 24px 10px 24px;
+            box-shadow: 0 1px 4px rgba(0,86,166,0.04);
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+          }
+          .total-row {
+            display: flex;
+            flex-direction: row;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2px;
+          }
+          .total-label {
+            color: #0056a6;
+            font-weight: 700;
+            text-align: left;
+          }
+          .total-value {
             text-align: right;
+            font-weight: 600;
+            color: #222;
+            min-width: 100px;
           }
           .payment-history {
-            margin-top: 30px;
+            margin: 36px 32px 0 32px;
+            background: #f7fafd;
+            border-radius: 10px;
+            box-shadow: 0 1px 4px rgba(0,86,166,0.04);
+            padding: 18px 18px 10px 18px;
           }
           .payment-history h3 {
             margin-bottom: 10px;
+            color: #0056a6;
+            font-size: 1.13em;
+            font-weight: 700;
           }
           .payment-history table {
             margin-top: 10px;
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            font-size: 1em;
+            background: #fff;
+            border-radius: 8px;
+            overflow: hidden;
+          }
+          .payment-history th {
+            background: linear-gradient(90deg, #0056a6 0%, #0072ce 100%);
+            color: #ff9900;
+            border: none;
+            padding: 8px 2px;
+            font-weight: 700;
+            text-align: center;
+            font-size: 1.05em;
+          }
+          .payment-history td {
+            border: none;
+            border-bottom: 1.5px solid #e3eaf3;
+            padding: 8px 2px;
+            text-align: center;
+            background: #fff;
+          }
+          .payment-history tr:last-child td {
+            border-bottom: none;
           }
           .footer {
-            margin-top: 30px;
+            margin-top: 36px;
             text-align: center;
-            font-size: 0.9em;
-            color: #666;
+            font-size: 1.08em;
+            color: #0056a6;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            padding-bottom: 24px;
           }
           @media print {
             body {
               padding: 0;
+              background: #fff;
             }
             .receipt {
               max-width: none;
+              box-shadow: none;
+              border-radius: 0;
             }
           }
         </style>
+        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
       </head>
       <body>
         <div class="receipt">
-          <div class="header">
-            <h2>Sales Receipt</h2>
-            <p>Date: ${formatDate(date)}</p>
+          <div class="aaf-header">
+            <h1>A.A.F Cables Industry</h1>
+            <div class="address">Harbanspura Lahore</div>
+            <table class="contacts-table">
+              <tr>
+                <td>Rashid Munir</td>
+                <td>Rahat Munir</td>
+                <td>Haris Munir</td>
+              </tr>
+              <tr>
+                <td>0321-4189745</td>
+                <td>0321-1687975</td>
+                <td>0323-8419568</td>
+              </tr>
+            </table>
           </div>
-
+          <div class="receipt-date">
+            ${formatDate(date)}
+          </div>
           <div class="customer-info">
-            <p><strong>Customer Name:</strong> ${customerName}</p>
-            <p><strong>Phone:</strong> ${customerPhone || '-'}</p>
+            <div><strong>Name:</strong> ${customerName}</div>
+            <div><strong>Phone:</strong> ${customerPhone || '-'}</div>
           </div>
-
           ${(paymentMethod === 'Manual Debt' && remainingAmount > 0) ? `
-            <div style="margin-bottom: 16px; padding: 12px; background: #fff3cd; border: 1px solid #ffeeba; border-radius: 4px; color: #856404;">
+            <div style="margin-bottom: 16px; padding: 12px; background: #fff3cd; border: 1px solid #ffeeba; border-radius: 4px; color: #856404; font-size:1.08em;">
               <strong>Pending Payment:</strong> This is a pending payment${comment ? `.<br/><strong>Reason:</strong> ${comment}` : '.'}
             </div>
           ` : ''}
-
-          <table>
+          <table class="receipt-table">
             <thead>
               <tr>
-                <th>Product</th>
+                <th>Name</th>
                 <th>Quantity</th>
-                <th>Price (PKR)</th>
-                <th>Total (PKR)</th>
+                <th>Description</th>
+                <th>Rate (PKR)</th>
+                <th>Amount (PKR)</th>
               </tr>
             </thead>
             <tbody>
@@ -175,46 +335,26 @@ export function generatePrintableHTML({
                 const total = price * quantity;
                 return `
                   <tr>
-                    <td>${item.name}</td>
+                    <td>${item.name || '-'}</td>
                     <td>${quantity}</td>
+                    <td>${item.description || '-'}</td>
                     <td>${Math.round(price)}</td>
                     <td>${Math.round(total)}</td>
                   </tr>
                 `;
               }).join('')}
             </tbody>
-            <tfoot>
-              <tr>
-                <td colspan="3" style="text-align: right;"><strong>Subtotal:</strong></td>
-                <td>${Math.round(subtotal)}</td>
-              </tr>
-              ${discount > 0 ? `
-                <tr>
-                  <td colspan="3" style="text-align: right;"><strong>Discount (${discount}%):</strong></td>
-                  <td>-${Math.round(discountAmount)}</td>
-                </tr>
-              ` : ''}
-              <tr>
-                <td colspan="3" style="text-align: right;"><strong>Total Amount:</strong></td>
-                <td>${Math.round(totalAmount)}</td>
-              </tr>
-              <tr>
-                <td colspan="3" style="text-align: right;"><strong>Paid Amount:</strong></td>
-                <td>${Math.round(paidAmount)}</td>
-              </tr>
-              ${remainingAmount > 0 ? `
-                <tr>
-                  <td colspan="3" style="text-align: right;"><strong>Remaining Amount:</strong></td>
-                  <td>${Math.round(remainingAmount)}</td>
-                </tr>
-              ` : ''}
-            </tfoot>
           </table>
-
+          <div class="total-section">
+            <div class="total-row"><span class="total-label">Subtotal:</span><span class="total-value">${Math.round(subtotal)} PKR</span></div>
+            ${discount > 0 ? `<div class="total-row"><span class="total-label">Discount (${discount}%):</span><span class="total-value">-${Math.round(discountAmount)} PKR</span></div>` : ''}
+            <div class="total-row"><span class="total-label">Total Amount:</span><span class="total-value">${Math.round(totalAmount)} PKR</span></div>
+            <div class="total-row"><span class="total-label">Paid Amount:</span><span class="total-value">${Math.round(paidAmount)} PKR</span></div>
+            ${remainingAmount > 0 ? `<div class="total-row"><span class="total-label">Remaining Amount:</span><span class="total-value">${Math.round(remainingAmount)} PKR</span></div>` : ''}
+          </div>
           ${generatePaymentHistoryTable(allPayments)}
-
           <div class="footer">
-            <p>Thank you for your business!</p>
+            Thank you for your business!
           </div>
         </div>
       </body>
