@@ -100,24 +100,31 @@ function CustomerManagement() {
 
   const handlePrint = (customer) => {
     const customerName = (customer.names && customer.names[0]) || customer.name || customer.phone || '-';
-    // Prepare items: include all product items and manual pending payments as separate rows
-    let items = Object.values(customer.items).map(item => ({
-      name: item.name,
-      quantity: item.totalQuantity,
-      price: item.totalValue / item.totalQuantity
-    }));
-    // Add manual pending payments as items
-    const pendingSales = customer.sales.filter(sale => sale.isDebt || sale.paymentMethod === 'Manual Debt');
-    pendingSales.forEach(sale => {
-      items.push({
-        name: 'Manual Pending Payment',
-        quantity: 1,
-        price: sale.totalAmount
-      });
+    let items = [];
+    customer.sales.forEach(sale => {
+      if (sale.paymentMethod === 'Manual Debt') {
+        // Only add a single manual pending payment line for this sale
+        items.push({
+          name: 'Manual Pending Payment',
+          quantity: 1,
+          price: sale.totalAmount
+        });
+      } else if (Array.isArray(sale.items)) {
+        // Add all product items for normal sales
+        sale.items.forEach(item => {
+          items.push({
+            name: item.name,
+            quantity: item.quantity,
+            price: item.price
+          });
+        });
+      }
     });
+    // Calculate total amount (products + manual debts)
+    const totalAmount = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
     // Prepare payment history: only actual payments (not manual debts)
     const paymentHistory = customer.sales
-      .filter(sale => sale.paidAmount && sale.paidAmount > 0 && !(sale.isDebt || sale.paymentMethod === 'Manual Debt'))
+      .filter(sale => sale.paidAmount && sale.paidAmount > 0 && sale.paymentMethod !== 'Manual Debt')
       .map(sale => ({
         date: sale.date,
         amount: sale.paidAmount,
@@ -126,8 +133,6 @@ function CustomerManagement() {
         comment: sale.comment,
         type: sale.paymentMethod || 'Sale'
       }));
-    // Calculate total amount (products + manual debts)
-    const totalAmount = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
     const html = generatePrintableHTML({
       customerName,
       customerPhone: customer.phone,
