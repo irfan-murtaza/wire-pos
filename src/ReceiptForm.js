@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { collection, addDoc, query, orderBy, getDocs } from 'firebase/firestore';
+import { collection, addDoc, query, orderBy, getDocs, where } from 'firebase/firestore';
 import { db } from './firebase';
 import { generatePrintableHTML } from './PrintableReceipt';
 import { useRef } from 'react';
@@ -19,6 +19,7 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
   const [paidAmount, setPaidAmount] = useState(0);
   const [isPartialPayment, setIsPartialPayment] = useState(false);
   const [paymentHistory, setPaymentHistory] = useState([]);
+  const [builteNo, setBuilteNo] = useState('');
 
   const calculateTotal = () => {
     const subtotal = items.reduce((sum, item) => sum + (item.quantity * item.price), 0);
@@ -180,8 +181,8 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
 
     try {
       const initialPayment = isPartialPayment ? paidAmount : total;
-      // Fetch the current max bill number
-      const receiptsQuery = query(collection(db, 'receipts'), orderBy('billNumber', 'desc'));
+      // Fetch the current max bill number for this customer
+      const receiptsQuery = query(collection(db, 'receipts'), where('customerPhone', '==', customerPhone), orderBy('billNumber', 'desc'));
       const receiptsSnapshot = await getDocs(receiptsQuery);
       let maxBillNumber = 0;
       if (!receiptsSnapshot.empty) {
@@ -210,7 +211,8 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
         discountAmount: showDiscount ? discountAmount : 0,
         subtotal,
         isDebt: isPartialPayment && (total - paidAmount) > 0,
-        billNumber: newBillNumber
+        billNumber: newBillNumber,
+        builteNo: builteNo
       };
 
       // Add the receipt to Firestore
@@ -253,6 +255,7 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
     setPaidAmount(0);
     setIsPartialPayment(false);
     setPaymentHistory([]);
+    setBuilteNo('');
   };
 
   const removeItem = (index) => {
@@ -319,6 +322,18 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
               {errors.customerPhone && (
                 <p className="mt-1 text-sm text-red-600">{errors.customerPhone}</p>
               )}
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Builte No</label>
+              <input
+                type="text"
+                placeholder="Enter Builte No (optional)"
+                value={builteNo}
+                onChange={e => setBuilteNo(e.target.value)}
+                className="w-full px-4 py-2 border rounded-md shadow-sm border-gray-300"
+                maxLength={50}
+              />
             </div>
           </div>
         </div>

@@ -73,6 +73,10 @@ function EditSaleModal({ sale, onSave, onClose }) {
               <input type="text" value={form.customerPhone} onChange={e => handleChange('customerPhone', e.target.value.replace(/\D/g, '').slice(0, 11))} className={`w-full px-3 py-2 border rounded-md shadow-sm ${errors.customerPhone ? 'border-red-500' : 'border-gray-300'}`} maxLength={11} />
               {errors.customerPhone && <p className="text-sm text-red-600">{errors.customerPhone}</p>}
             </div>
+            <div className="flex-1">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Builte No</label>
+              <input type="text" value={form.builteNo || ''} onChange={e => handleChange('builteNo', e.target.value)} className="w-full px-3 py-2 border rounded-md shadow-sm border-gray-300" maxLength={50} />
+            </div>
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Items</label>
