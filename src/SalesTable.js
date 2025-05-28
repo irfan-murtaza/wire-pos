@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { collection, getDocs, query, orderBy, addDoc, where, doc, updateDoc } from 'firebase/firestore';
+import { collection, getDocs, query, orderBy, addDoc, where, doc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { db } from './firebase';
 import { generatePrintableHTML } from './PrintableReceipt';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import EditSaleModal from './EditSaleModal';
 
 function SalesTable({ onAddNewSale, refreshTrigger }) {
   const [sales, setSales] = useState([]);
@@ -23,6 +24,8 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
   const [paymentHistory, setPaymentHistory] = useState([]);
   const [paymentErrors, setPaymentErrors] = useState({});
   const [chequeNumber, setChequeNumber] = useState('');
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editSale, setEditSale] = useState(null);
 
   const months = [
     'January', 'February', 'March', 'April', 'May', 'June',
@@ -125,7 +128,8 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
         discountAmount: sale.discountAmount || 0,
         subtotal: sale.totalAmount + (sale.discountAmount || 0),
         paymentHistory: paymentHistory,
-        billNumber: sale.billNumber
+        billNumber: sale.billNumber,
+        builteNo: sale.builteNo || '-'
       });
     
       const printWindow = window.open('', '_blank', 'width=800,height=600');
@@ -252,6 +256,7 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
 
       return [
         sale.billNumber || '-',
+        sale.builteNo || '-',
         formatDate(sale.date),
         customerInfo,
         paymentInfo,
@@ -263,23 +268,68 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
     // Add main table
     autoTable(doc, {
       startY: yPos + 30,
-      head: [['Bill No', 'Date', 'Customer', 'Payment', 'Total', 'Items (Qty: Unit Price in PKR)']],
+      head: [['Bill No', 'Builte No', 'Date', 'Customer', 'Payment', 'Total', 'Items (Qty: Unit Price in PKR)']],
       body: tableData,
       theme: 'grid',
       headStyles: { fillColor: [41, 128, 185] },
       styles: { fontSize: 7 },
       columnStyles: {
         0: { cellWidth: 20 },
-        1: { cellWidth: 30 },
+        1: { cellWidth: 20 },
         2: { cellWidth: 30 },
-        3: { cellWidth: 20 },
-        4: { cellWidth: 15 },
-        5: { cellWidth: 40, cellPadding: 2 }
+        3: { cellWidth: 30 },
+        4: { cellWidth: 20 },
+        5: { cellWidth: 15 },
+        6: { cellWidth: 40, cellPadding: 2 }
       }
     });
 
     // Save the PDF
     doc.save(`sales_report_${months[selectedMonth]}_${selectedYear}.pdf`);
+  };
+
+  const handleDelete = async (saleId) => {
+    if (!window.confirm('Are you sure you want to delete this sale? This action cannot be undone.')) return;
+    try {
+      await deleteDoc(doc(db, 'receipts', saleId));
+      fetchSales();
+    } catch (error) {
+      alert('Error deleting sale: ' + error.message);
+    }
+  };
+
+  const handleEdit = (sale) => {
+    setEditSale(sale);
+    setShowEditModal(true);
+  };
+
+  const handleEditSave = async (updatedSale) => {
+    try {
+      const saleDoc = doc(db, 'receipts', updatedSale.id);
+      await updateDoc(saleDoc, {
+        customerName: updatedSale.customerName,
+        customerPhone: updatedSale.customerPhone,
+        items: updatedSale.items,
+        totalAmount: updatedSale.totalAmount,
+        paidAmount: updatedSale.paidAmount,
+        remainingAmount: updatedSale.remainingAmount,
+        date: updatedSale.date,
+        paymentMethod: updatedSale.paymentMethod,
+        chequeNumber: updatedSale.chequeNumber || '',
+        comment: updatedSale.comment || '',
+        discount: updatedSale.discount || 0,
+        discountAmount: updatedSale.discountAmount || 0,
+        subtotal: updatedSale.subtotal || 0,
+        isDebt: updatedSale.isDebt || false,
+        billNumber: updatedSale.billNumber,
+        builteNo: updatedSale.builteNo || ''
+      });
+      setShowEditModal(false);
+      setEditSale(null);
+      fetchSales();
+    } catch (error) {
+      alert('Error updating sale: ' + error.message);
+    }
   };
 
   if (loading) {
@@ -387,6 +437,7 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
           <thead className="bg-gray-50">
             <tr>
               <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Bill No</th>
+              <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Builte No</th>
               <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Date</th>
               <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Customer</th>
               <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Payment</th>
@@ -398,6 +449,7 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
             {filteredSales.map((sale) => (
               <tr key={sale.id} className="hover:bg-gray-50">
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-center">{sale.billNumber || '-'}</td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-center">{sale.builteNo || '-'}</td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-center">
                   {formatDate(sale.date)}
                 </td>
@@ -433,6 +485,24 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
                     <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                    </svg>
+                  </button>
+                  <button
+                    onClick={() => handleEdit(sale)}
+                    className="text-yellow-600 hover:text-yellow-800 ml-2"
+                    title="Edit Sale"
+                  >
+                    <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536M9 13l6-6m2 2l-6 6m-2 2h6" />
+                    </svg>
+                  </button>
+                  <button
+                    onClick={() => handleDelete(sale.id)}
+                    className="text-red-600 hover:text-red-800 ml-2"
+                    title="Delete Sale"
+                  >
+                    <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                     </svg>
                   </button>
                 </td>
@@ -574,6 +644,10 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
             </div>
           </div>
         </div>
+      )}
+
+      {showEditModal && editSale && (
+        <EditSaleModal sale={editSale} onSave={handleEditSave} onClose={() => setShowEditModal(false)} />
       )}
     </div>
   );

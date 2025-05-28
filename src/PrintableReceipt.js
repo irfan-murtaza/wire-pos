@@ -14,7 +14,8 @@ export function generatePrintableHTML({
   remainingAmount,
   isCustomerReport = false,
   paymentHistory = [],
-  billNumber
+  billNumber,
+  builteNo
 }) {
   const formatDate = (dateString) => {
     return new Date(dateString).toLocaleDateString('en-US', {
@@ -283,6 +284,14 @@ export function generatePrintableHTML({
             font-weight: 600;
             letter-spacing: 0.5px;
           }
+          .builte-no {
+            text-align: center;
+            font-size: 1.08em;
+            color: #222;
+            margin: 2px 0 12px 0;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+          }
           @media print {
             body {
               padding: 0;
@@ -319,6 +328,7 @@ export function generatePrintableHTML({
             ${formatDate(date)}
           </div>
           ${billNumber ? `<div class="bill-number">Bill No: ${billNumber}</div>` : ''}
+          <div class="builte-no">Builte No: ${builteNo || '-'}</div>
           <div class="customer-info">
             <div><strong>Name:</strong> ${customerName}</div>
             <div><strong>Phone:</strong> ${customerPhone || '-'}</div>
