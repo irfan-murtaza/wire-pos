@@ -278,6 +278,20 @@ function CustomerManagement() {
   };
 
   const handleAddPaymentClick = (customer) => {
+    console.log('Opening payment modal for customer:', customer.phone);
+    // Close all modals first
+    setShowDetails(false);
+    setShowSaleDetails(false);
+    setShowAddCustomerModal(false);
+    setShowAddPendingModal(false);
+    setShowPrintModal(false);
+    
+    // Reset all modal-related states
+    setSelectedCustomer(null);
+    setSelectedSale(null);
+    setPrintCustomer(null);
+    
+    // Then open payment modal
     setPaymentCustomer(customer);
     setPaymentAmount(customer.remainingAmount);
     setPaymentMethod('Cash');
@@ -494,6 +508,21 @@ function CustomerManagement() {
                   </button>
                   <button
                     onClick={() => {
+                      console.log('Opening add pending modal for customer:', customer.phone);
+                      // Close all modals first
+                      setShowDetails(false);
+                      setShowSaleDetails(false);
+                      setShowPaymentModal(false);
+                      setShowAddCustomerModal(false);
+                      setShowPrintModal(false);
+                      
+                      // Reset all modal-related states
+                      setSelectedCustomer(null);
+                      setSelectedSale(null);
+                      setPrintCustomer(null);
+                      setPaymentCustomer(null);
+                      
+                      // Then open add pending modal
                       setPendingCustomer(customer);
                       setPendingAmount('');
                       setPendingReason('');
@@ -738,16 +767,6 @@ function CustomerManagement() {
                   className="w-full px-4 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
                 />
               </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Previous Day Debt (PKR)</label>
-                <input
-                  type="number"
-                  value={previousDayDebt}
-                  onChange={e => setPreviousDayDebt(e.target.value)}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-                  min="0"
-                />
-              </div>
             </div>
             <div className="flex justify-end space-x-3 mt-6">
               <button
@@ -763,6 +782,213 @@ function CustomerManagement() {
                 Print
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add Payment Modal */}
+      {showPaymentModal && paymentCustomer && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-[100]">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">Add Payment for {paymentCustomer.names?.[0] || paymentCustomer.phone}</h3>
+              <button
+                onClick={() => {
+                  setShowPaymentModal(false);
+                  setPaymentCustomer(null);
+                }}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                ✕
+              </button>
+            </div>
+            <form onSubmit={handlePaymentSubmit}>
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-1">Amount (PKR)</label>
+                <input
+                  type="number"
+                  value={paymentAmount}
+                  onChange={e => setPaymentAmount(e.target.value)}
+                  className={`w-full px-4 py-2 border rounded-md shadow-sm ${paymentErrors.amount ? 'border-red-500' : 'border-gray-300'}`}
+                  min="1"
+                  required
+                />
+                {paymentErrors.amount && <p className="text-red-600 text-xs mt-1">{paymentErrors.amount}</p>}
+              </div>
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-1">Payment Method</label>
+                <select
+                  value={paymentMethod}
+                  onChange={e => setPaymentMethod(e.target.value)}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-md shadow-sm"
+                >
+                  <option value="Cash">Cash</option>
+                  <option value="Card">Card</option>
+                  <option value="Cheque">Cheque</option>
+                  <option value="Other">Other</option>
+                </select>
+              </div>
+              {paymentMethod === 'Cheque' && (
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Cheque Number</label>
+                  <input
+                    type="text"
+                    value={chequeNumber}
+                    onChange={e => setChequeNumber(e.target.value)}
+                    className={`w-full px-4 py-2 border rounded-md shadow-sm ${paymentErrors.chequeNumber ? 'border-red-500' : 'border-gray-300'}`}
+                    required
+                  />
+                  {paymentErrors.chequeNumber && <p className="text-red-600 text-xs mt-1">{paymentErrors.chequeNumber}</p>}
+                </div>
+              )}
+              {paymentMethod === 'Other' && (
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Comment</label>
+                  <input
+                    type="text"
+                    value={paymentComment}
+                    onChange={e => setPaymentComment(e.target.value)}
+                    className={`w-full px-4 py-2 border rounded-md shadow-sm ${paymentErrors.comment ? 'border-red-500' : 'border-gray-300'}`}
+                    required
+                  />
+                  {paymentErrors.comment && <p className="text-red-600 text-xs mt-1">{paymentErrors.comment}</p>}
+                </div>
+              )}
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-1">Date</label>
+                <input
+                  type="date"
+                  value={paymentDate}
+                  onChange={e => setPaymentDate(e.target.value)}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-md shadow-sm"
+                  required
+                />
+              </div>
+              <div className="flex justify-end space-x-3 mt-6">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowPaymentModal(false);
+                    setPaymentCustomer(null);
+                  }}
+                  className="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-gray-700 hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-green-600 text-white rounded-md shadow-sm hover:bg-green-700"
+                >
+                  Add Payment
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Add Pending Modal */}
+      {showAddPendingModal && pendingCustomer && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-[100]">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">Add Pending Payment for {pendingCustomer.names?.[0] || pendingCustomer.phone}</h3>
+              <button
+                onClick={() => {
+                  setShowAddPendingModal(false);
+                  setPendingCustomer(null);
+                }}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                ✕
+              </button>
+            </div>
+            <form onSubmit={e => {
+              e.preventDefault();
+              // Validation
+              let error = '';
+              if (!pendingAmount || isNaN(Number(pendingAmount))) error = 'Please enter a valid amount';
+              if (!pendingReason.trim()) error = 'Please enter a reason';
+              if (error) {
+                setPendingError(error);
+                return;
+              }
+              // Add manual debt as a new sale/receipt
+              addDoc(collection(db, 'receipts'), {
+                customerName: pendingCustomer.names?.[0] || '',
+                customerPhone: pendingCustomer.phone,
+                totalAmount: Number(pendingAmount),
+                paidAmount: 0,
+                remainingAmount: Number(pendingAmount),
+                date: new Date().toISOString(),
+                paymentMethod: 'Manual Debt',
+                comment: pendingReason,
+                items: [],
+                isDebt: true
+              }).then(() => {
+                setShowAddPendingModal(false);
+                setPendingCustomer(null);
+                setPendingAmount('');
+                setPendingReason('');
+                setPendingError('');
+                fetchCustomerData();
+              }).catch(err => {
+                setPendingError('Error saving pending payment: ' + err.message);
+              });
+            }}>
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-1">Amount (PKR)</label>
+                <input
+                  type="number"
+                  value={pendingAmount}
+                  onChange={e => setPendingAmount(e.target.value)}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-md shadow-sm"
+                  min="1"
+                  required
+                />
+              </div>
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-1">Reason</label>
+                <input
+                  type="text"
+                  value={pendingReason}
+                  onChange={e => setPendingReason(e.target.value)}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-md shadow-sm"
+                  required
+                />
+              </div>
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-1">Date</label>
+                <input
+                  type="date"
+                  value={new Date().toISOString().split('T')[0]}
+                  disabled
+                  className="w-full px-4 py-2 border border-gray-300 rounded-md shadow-sm bg-gray-100 cursor-not-allowed"
+                />
+              </div>
+              {pendingError && <p className="text-red-600 text-xs mb-2">{pendingError}</p>}
+              <div className="flex justify-end space-x-3 mt-6">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowAddPendingModal(false);
+                    setPendingCustomer(null);
+                    setPendingAmount('');
+                    setPendingReason('');
+                    setPendingError('');
+                  }}
+                  className="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-gray-700 hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-orange-600 text-white rounded-md shadow-sm hover:bg-orange-700"
+                >
+                  Add Pending
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
