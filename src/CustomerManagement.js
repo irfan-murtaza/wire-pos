@@ -28,6 +28,10 @@ function CustomerManagement() {
   const [pendingError, setPendingError] = useState('');
   const [pendingReason, setPendingReason] = useState('');
   const [newCustomerReason, setNewCustomerReason] = useState('');
+  const [showPrintModal, setShowPrintModal] = useState(false);
+  const [printCustomer, setPrintCustomer] = useState(null);
+  const [previousDayDebt, setPreviousDayDebt] = useState(0);
+  const [printDate, setPrintDate] = useState(() => new Date().toISOString().split('T')[0]);
 
   useEffect(() => {
     fetchCustomerData();
@@ -98,26 +102,71 @@ function CustomerManagement() {
     }
   };
 
-  const handlePrint = (customer) => {
+  // Helper to check if a date is today
+  const isToday = (dateString) => {
+    const today = new Date();
+    const date = new Date(dateString);
+    return (
+      date.getFullYear() === today.getFullYear() &&
+      date.getMonth() === today.getMonth() &&
+      date.getDate() === today.getDate()
+    );
+  };
+
+  // Helper to check if a date matches the selected print date (robust to format/timezone)
+  const isPrintDate = (dateString) => {
+    const selected = new Date(printDate);
+    const saleDate = new Date(dateString);
+    // Normalize both dates to local year, month, day
+    return (
+      selected.getFullYear() === saleDate.getFullYear() &&
+      selected.getMonth() === saleDate.getMonth() &&
+      selected.getDate() === saleDate.getDate()
+    );
+  };
+
+  // New print handler to use modal values
+  const handlePrintWithDebt = () => {
+    if (!printCustomer) return;
+    const customer = printCustomer;
     const customerName = (customer.names && customer.names[0]) || customer.name || customer.phone || '-';
-    // Prepare items: include all product items and manual pending payments as separate rows
-    let items = Object.values(customer.items).map(item => ({
-      name: item.name,
-      quantity: item.totalQuantity,
-      price: item.totalValue / item.totalQuantity
-    }));
-    // Add manual pending payments as items
-    const pendingSales = customer.sales.filter(sale => sale.isDebt || sale.paymentMethod === 'Manual Debt');
-    pendingSales.forEach(sale => {
-      items.push({
-        name: 'Manual Pending Payment',
-        quantity: 1,
-        price: sale.totalAmount
-      });
+    let items = [];
+    customer.sales.forEach(sale => {
+      if (isPrintDate(sale.date)) {
+        if (sale.paymentMethod === 'Manual Debt') {
+          items.push({
+            name: 'Manual Pending Payment',
+            quantity: 1,
+            price: sale.totalAmount
+          });
+        } else if (Array.isArray(sale.items)) {
+          sale.items.forEach(item => {
+            items.push({
+              name: item.name,
+              quantity: item.quantity,
+              price: item.price
+            });
+          });
+        }
+      }
     });
-    // Prepare payment history: only actual payments (not manual debts)
+    // Add previous day debt if entered and > 0
+    if (previousDayDebt && Number(previousDayDebt) > 0) {
+      items.push({
+        name: 'Previous Day Debt',
+        quantity: 1,
+        price: Number(previousDayDebt)
+      });
+    }
+    const totalAmount = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+    // Calculate paid amount for the selected date
+    const paidAmountForSelectedDate = customer.sales
+      .filter(sale => sale.paidAmount && sale.paidAmount > 0 && sale.paymentMethod !== 'Manual Debt' && isPrintDate(sale.date))
+      .reduce((sum, sale) => sum + sale.paidAmount, 0);
+    // Calculate remaining amount for the receipt
+    const remainingAmount = totalAmount - paidAmountForSelectedDate;
     const paymentHistory = customer.sales
-      .filter(sale => sale.paidAmount && sale.paidAmount > 0 && !(sale.isDebt || sale.paymentMethod === 'Manual Debt'))
+      .filter(sale => sale.paidAmount && sale.paidAmount > 0 && sale.paymentMethod !== 'Manual Debt' && isPrintDate(sale.date))
       .map(sale => ({
         date: sale.date,
         amount: sale.paidAmount,
@@ -126,15 +175,81 @@ function CustomerManagement() {
         comment: sale.comment,
         type: sale.paymentMethod || 'Sale'
       }));
-    // Calculate total amount (products + manual debts)
-    const totalAmount = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
     const html = generatePrintableHTML({
       customerName,
       customerPhone: customer.phone,
       items,
       totalAmount,
-      paidAmount: customer.paidAmount,
-      remainingAmount: customer.remainingAmount,
+      paidAmount: paidAmountForSelectedDate,
+      remainingAmount,
+      date: printDate,
+      isCustomerReport: true,
+      subtotal: totalAmount,
+      paymentMethod: 'Customer Report',
+      paymentHistory
+    });
+    const printWindow = window.open('', '_blank', 'width=800,height=600');
+    printWindow.document.open();
+    printWindow.document.write(html);
+    printWindow.document.close();
+    printWindow.onload = function () {
+      printWindow.focus();
+      printWindow.print();
+      printWindow.close();
+    };
+    setShowPrintModal(false);
+    setPrintCustomer(null);
+    setPreviousDayDebt(0);
+    setPrintDate(new Date().toISOString().split('T')[0]);
+  };
+
+  const handlePrint = (customer) => {
+    const customerName = (customer.names && customer.names[0]) || customer.name || customer.phone || '-';
+    let items = [];
+    customer.sales.forEach(sale => {
+      if (sale.paymentMethod === 'Manual Debt') {
+        // Only add a single manual pending payment line for this sale
+        items.push({
+          name: 'Manual Pending Payment',
+          quantity: 1,
+          price: sale.totalAmount
+        });
+      } else if (Array.isArray(sale.items)) {
+        // Add all product items for normal sales
+        sale.items.forEach(item => {
+          items.push({
+            name: item.name,
+            quantity: item.quantity,
+            price: item.price
+          });
+        });
+      }
+    });
+    // Calculate total amount (products + manual debts)
+    const totalAmount = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+    // Calculate paid amount for the selected date
+    const paidAmountForSelectedDate = customer.sales
+      .filter(sale => sale.paidAmount && sale.paidAmount > 0 && sale.paymentMethod !== 'Manual Debt' && isPrintDate(sale.date))
+      .reduce((sum, sale) => sum + sale.paidAmount, 0);
+    // Calculate remaining amount for the receipt
+    const remainingAmount = totalAmount - paidAmountForSelectedDate;
+    const paymentHistory = customer.sales
+      .filter(sale => sale.paidAmount && sale.paidAmount > 0 && sale.paymentMethod !== 'Manual Debt' && isPrintDate(sale.date))
+      .map(sale => ({
+        date: sale.date,
+        amount: sale.paidAmount,
+        paymentMethod: sale.paymentMethod,
+        chequeNumber: sale.chequeNumber,
+        comment: sale.comment,
+        type: sale.paymentMethod || 'Sale'
+      }));
+    const html = generatePrintableHTML({
+      customerName,
+      customerPhone: customer.phone,
+      items,
+      totalAmount,
+      paidAmount: paidAmountForSelectedDate,
+      remainingAmount,
       date: new Date().toISOString(),
       isCustomerReport: true,
       subtotal: totalAmount,
@@ -163,6 +278,20 @@ function CustomerManagement() {
   };
 
   const handleAddPaymentClick = (customer) => {
+    console.log('Opening payment modal for customer:', customer.phone);
+    // Close all modals first
+    setShowDetails(false);
+    setShowSaleDetails(false);
+    setShowAddCustomerModal(false);
+    setShowAddPendingModal(false);
+    setShowPrintModal(false);
+    
+    // Reset all modal-related states
+    setSelectedCustomer(null);
+    setSelectedSale(null);
+    setPrintCustomer(null);
+    
+    // Then open payment modal
     setPaymentCustomer(customer);
     setPaymentAmount(customer.remainingAmount);
     setPaymentMethod('Cash');
@@ -350,7 +479,7 @@ function CustomerManagement() {
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-center space-x-2">
                   <button
-                    onClick={() => handlePrint(customer)}
+                    onClick={() => { setPrintCustomer(customer); setShowPrintModal(true); }}
                     className="text-blue-600 hover:text-blue-800"
                     title="Print Report"
                   >
@@ -379,6 +508,21 @@ function CustomerManagement() {
                   </button>
                   <button
                     onClick={() => {
+                      console.log('Opening add pending modal for customer:', customer.phone);
+                      // Close all modals first
+                      setShowDetails(false);
+                      setShowSaleDetails(false);
+                      setShowPaymentModal(false);
+                      setShowAddCustomerModal(false);
+                      setShowPrintModal(false);
+                      
+                      // Reset all modal-related states
+                      setSelectedCustomer(null);
+                      setSelectedSale(null);
+                      setPrintCustomer(null);
+                      setPaymentCustomer(null);
+                      
+                      // Then open add pending modal
                       setPendingCustomer(customer);
                       setPendingAmount('');
                       setPendingReason('');
@@ -593,7 +737,9 @@ function CustomerManagement() {
                   </div>
                   <div className="bg-white p-4 rounded-lg shadow">
                     <div className="text-sm text-gray-500">Total Amount</div>
-                    <div className="text-lg font-semibold text-gray-900">Rs {Math.round(selectedSale.totalAmount)}</div>
+                    <div className="text-lg font-semibold text-gray-900">
+                      Rs {Math.round(selectedSale.totalAmount)}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -602,31 +748,80 @@ function CustomerManagement() {
         </div>
       )}
 
-      {showPaymentModal && paymentCustomer && (
+      {showPrintModal && printCustomer && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-6">
             <div className="flex justify-between items-center mb-4">
               <h3 className="text-lg font-semibold text-gray-900">
-                {paymentCustomer.remainingAmount > 0 ? 'Add Payment' : 'Add Credit'} for {paymentCustomer.name}
+                Print Customer Report for {printCustomer.names?.[0] || printCustomer.phone}
               </h3>
-              <button onClick={() => setShowPaymentModal(false)} className="text-gray-500 hover:text-gray-700">✕</button>
+              <button onClick={() => setShowPrintModal(false)} className="text-gray-500 hover:text-gray-700">✕</button>
             </div>
-            <form onSubmit={handlePaymentSubmit} className="space-y-4">
+            <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Amount (PKR)</label>
-                <input 
-                  type="number" 
-                  value={paymentAmount} 
-                  onChange={e => setPaymentAmount(e.target.value)} 
-                  className="w-full px-4 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500" 
-                  min="1" 
-                  required 
+                <label className="block text-sm font-medium text-gray-700 mb-1">Date</label>
+                <input
+                  type="date"
+                  value={printDate}
+                  onChange={e => setPrintDate(e.target.value)}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
                 />
-                {paymentErrors.amount && <p className="mt-1 text-sm text-red-600">{paymentErrors.amount}</p>}
               </div>
-              <div>
+            </div>
+            <div className="flex justify-end space-x-3 mt-6">
+              <button
+                onClick={() => setShowPrintModal(false)}
+                className="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-gray-700 hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handlePrintWithDebt}
+                className="px-4 py-2 bg-blue-600 text-white rounded-md shadow-sm hover:bg-blue-700"
+              >
+                Print
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add Payment Modal */}
+      {showPaymentModal && paymentCustomer && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-[100]">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">Add Payment for {paymentCustomer.names?.[0] || paymentCustomer.phone}</h3>
+              <button
+                onClick={() => {
+                  setShowPaymentModal(false);
+                  setPaymentCustomer(null);
+                }}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                ✕
+              </button>
+            </div>
+            <form onSubmit={handlePaymentSubmit}>
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-1">Amount (PKR)</label>
+                <input
+                  type="number"
+                  value={paymentAmount}
+                  onChange={e => setPaymentAmount(e.target.value)}
+                  className={`w-full px-4 py-2 border rounded-md shadow-sm ${paymentErrors.amount ? 'border-red-500' : 'border-gray-300'}`}
+                  min="1"
+                  required
+                />
+                {paymentErrors.amount && <p className="text-red-600 text-xs mt-1">{paymentErrors.amount}</p>}
+              </div>
+              <div className="mb-4">
                 <label className="block text-sm font-medium text-gray-700 mb-1">Payment Method</label>
-                <select value={paymentMethod} onChange={e => setPaymentMethod(e.target.value)} className="w-full px-4 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                <select
+                  value={paymentMethod}
+                  onChange={e => setPaymentMethod(e.target.value)}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-md shadow-sm"
+                >
                   <option value="Cash">Cash</option>
                   <option value="Card">Card</option>
                   <option value="Cheque">Cheque</option>
@@ -634,197 +829,166 @@ function CustomerManagement() {
                 </select>
               </div>
               {paymentMethod === 'Cheque' && (
-                <div>
+                <div className="mb-4">
                   <label className="block text-sm font-medium text-gray-700 mb-1">Cheque Number</label>
-                  <input type="text" value={chequeNumber} onChange={e => setChequeNumber(e.target.value)} className="w-full px-4 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500" required />
-                  {paymentErrors.chequeNumber && <p className="mt-1 text-sm text-red-600">{paymentErrors.chequeNumber}</p>}
+                  <input
+                    type="text"
+                    value={chequeNumber}
+                    onChange={e => setChequeNumber(e.target.value)}
+                    className={`w-full px-4 py-2 border rounded-md shadow-sm ${paymentErrors.chequeNumber ? 'border-red-500' : 'border-gray-300'}`}
+                    required
+                  />
+                  {paymentErrors.chequeNumber && <p className="text-red-600 text-xs mt-1">{paymentErrors.chequeNumber}</p>}
                 </div>
               )}
               {paymentMethod === 'Other' && (
-                <div>
+                <div className="mb-4">
                   <label className="block text-sm font-medium text-gray-700 mb-1">Comment</label>
-                  <input type="text" value={paymentComment} onChange={e => setPaymentComment(e.target.value)} className="w-full px-4 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500" required />
-                  {paymentErrors.comment && <p className="mt-1 text-sm text-red-600">{paymentErrors.comment}</p>}
+                  <input
+                    type="text"
+                    value={paymentComment}
+                    onChange={e => setPaymentComment(e.target.value)}
+                    className={`w-full px-4 py-2 border rounded-md shadow-sm ${paymentErrors.comment ? 'border-red-500' : 'border-gray-300'}`}
+                    required
+                  />
+                  {paymentErrors.comment && <p className="text-red-600 text-xs mt-1">{paymentErrors.comment}</p>}
                 </div>
               )}
-              <div>
+              <div className="mb-4">
                 <label className="block text-sm font-medium text-gray-700 mb-1">Date</label>
-                <input type="date" value={paymentDate} onChange={e => setPaymentDate(e.target.value)} className="w-full px-4 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500" required />
+                <input
+                  type="date"
+                  value={paymentDate}
+                  onChange={e => setPaymentDate(e.target.value)}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-md shadow-sm"
+                  required
+                />
               </div>
-              <div className="flex justify-end space-x-3">
-                <button type="button" onClick={() => setShowPaymentModal(false)} className="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-gray-700 hover:bg-gray-50">Cancel</button>
-                <button type="submit" className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-md shadow-sm transition-all">Add Payment</button>
+              <div className="flex justify-end space-x-3 mt-6">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowPaymentModal(false);
+                    setPaymentCustomer(null);
+                  }}
+                  className="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-gray-700 hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-green-600 text-white rounded-md shadow-sm hover:bg-green-700"
+                >
+                  Add Payment
+                </button>
               </div>
             </form>
           </div>
         </div>
       )}
 
-      {showAddCustomerModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+      {/* Add Pending Modal */}
+      {showAddPendingModal && pendingCustomer && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-[100]">
           <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
-            <h3 className="text-lg font-semibold mb-4">Add New Customer</h3>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Name</label>
-                <input
-                  type="text"
-                  value={newCustomer.name}
-                  onChange={e => setNewCustomer({ ...newCustomer, name: e.target.value })}
-                  className={`mt-1 block w-full border rounded-md shadow-sm p-2 ${addCustomerErrors.name ? 'border-red-500' : 'border-gray-300'}`}
-                />
-                {addCustomerErrors.name && <p className="mt-1 text-sm text-red-600">{addCustomerErrors.name}</p>}
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Phone</label>
-                <input
-                  type="text"
-                  value={newCustomer.phone}
-                  onChange={e => setNewCustomer({ ...newCustomer, phone: e.target.value.replace(/\D/g, '').slice(0, 11) })}
-                  className={`mt-1 block w-full border rounded-md shadow-sm p-2 ${addCustomerErrors.phone ? 'border-red-500' : 'border-gray-300'}`}
-                  maxLength={11}
-                />
-                {addCustomerErrors.phone && <p className="mt-1 text-sm text-red-600">{addCustomerErrors.phone}</p>}
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Pending Amount (PKR)</label>
-                <input
-                  type="number"
-                  value={newCustomer.pendingAmount}
-                  onChange={e => setNewCustomer({ ...newCustomer, pendingAmount: e.target.value })}
-                  className={`mt-1 block w-full border rounded-md shadow-sm p-2 ${addCustomerErrors.pendingAmount ? 'border-red-500' : 'border-gray-300'}`}
-                  min="1"
-                />
-                {addCustomerErrors.pendingAmount && <p className="mt-1 text-sm text-red-600">{addCustomerErrors.pendingAmount}</p>}
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Reason {Number(newCustomer.pendingAmount) > 0 ? '(required)' : '(optional)'}</label>
-                <input
-                  type="text"
-                  value={newCustomerReason}
-                  onChange={e => setNewCustomerReason(e.target.value)}
-                  className={`mt-1 block w-full border rounded-md shadow-sm p-2 ${addCustomerErrors.reason ? 'border-red-500' : 'border-gray-300'}`}
-                  placeholder="Enter reason for pending amount"
-                  disabled={Number(newCustomer.pendingAmount) === 0}
-                />
-                {addCustomerErrors.reason && <p className="mt-1 text-sm text-red-600">{addCustomerErrors.reason}</p>}
-              </div>
-            </div>
-            <div className="flex justify-end space-x-3 mt-6">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">Add Pending Payment for {pendingCustomer.names?.[0] || pendingCustomer.phone}</h3>
               <button
                 onClick={() => {
-                  setShowAddCustomerModal(false);
-                  setNewCustomer({ name: '', phone: '', pendingAmount: '' });
-                  setNewCustomerReason('');
-                  setAddCustomerErrors({});
+                  setShowAddPendingModal(false);
+                  setPendingCustomer(null);
                 }}
-                className="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-gray-700 hover:bg-gray-50"
+                className="text-gray-500 hover:text-gray-700"
               >
-                Cancel
-              </button>
-              <button
-                onClick={async () => {
-                  // Validate
-                  const errors = {};
-                  if (!newCustomer.name.trim()) errors.name = 'Name is required';
-                  if (!/^\d{11}$/.test(newCustomer.phone)) errors.phone = 'Phone must be 11 digits';
-                  if (Object.values(customers).some(c => c.phone === newCustomer.phone)) errors.phone = 'Customer with this phone already exists';
-                  if (newCustomer.pendingAmount === '' || isNaN(newCustomer.pendingAmount)) errors.pendingAmount = 'Pending amount is required';
-                  if (Number(newCustomer.pendingAmount) > 0 && !newCustomerReason.trim()) errors.reason = 'Reason is required for pending amount';
-                  setAddCustomerErrors(errors);
-                  if (Object.keys(errors).length > 0) return;
-                  // Add a debt sale to receipts
-                  await addDoc(collection(db, 'receipts'), {
-                    customerName: newCustomer.name,
-                    customerPhone: newCustomer.phone,
-                    totalAmount: Number(newCustomer.pendingAmount),
-                    paidAmount: 0,
-                    remainingAmount: Number(newCustomer.pendingAmount),
-                    date: new Date().toISOString(),
-                    paymentMethod: 'Manual Debt',
-                    items: [],
-                    isDebt: Number(newCustomer.pendingAmount) > 0,
-                    comment: newCustomerReason
-                  });
-                  setShowAddCustomerModal(false);
-                  setNewCustomer({ name: '', phone: '', pendingAmount: '' });
-                  setNewCustomerReason('');
-                  setAddCustomerErrors({});
-                  fetchCustomerData();
-                }}
-                className="px-4 py-2 bg-blue-600 text-white rounded-md shadow-sm hover:bg-blue-700"
-              >
-                Add Customer
+                ✕
               </button>
             </div>
-          </div>
-        </div>
-      )}
-
-      {showAddPendingModal && pendingCustomer && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
-            <h3 className="text-lg font-semibold mb-4">Add Pending Payment for {pendingCustomer.names?.[0] || pendingCustomer.phone}</h3>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Pending Amount (PKR)</label>
+            <form onSubmit={e => {
+              e.preventDefault();
+              // Validation
+              let error = '';
+              if (!pendingAmount || isNaN(Number(pendingAmount))) error = 'Please enter a valid amount';
+              if (!pendingReason.trim()) error = 'Please enter a reason';
+              if (error) {
+                setPendingError(error);
+                return;
+              }
+              // Add manual debt as a new sale/receipt
+              addDoc(collection(db, 'receipts'), {
+                customerName: pendingCustomer.names?.[0] || '',
+                customerPhone: pendingCustomer.phone,
+                totalAmount: Number(pendingAmount),
+                paidAmount: 0,
+                remainingAmount: Number(pendingAmount),
+                date: new Date().toISOString(),
+                paymentMethod: 'Manual Debt',
+                comment: pendingReason,
+                items: [],
+                isDebt: true
+              }).then(() => {
+                setShowAddPendingModal(false);
+                setPendingCustomer(null);
+                setPendingAmount('');
+                setPendingReason('');
+                setPendingError('');
+                fetchCustomerData();
+              }).catch(err => {
+                setPendingError('Error saving pending payment: ' + err.message);
+              });
+            }}>
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-1">Amount (PKR)</label>
                 <input
                   type="number"
                   value={pendingAmount}
                   onChange={e => setPendingAmount(e.target.value)}
-                  className={`mt-1 block w-full border rounded-md shadow-sm p-2 ${pendingError ? 'border-red-500' : 'border-gray-300'}`}
-                  min="0"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-md shadow-sm"
+                  min="1"
+                  required
                 />
-                {pendingError && <p className="mt-1 text-sm text-red-600">{pendingError}</p>}
               </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Reason</label>
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-1">Reason</label>
                 <input
                   type="text"
                   value={pendingReason}
                   onChange={e => setPendingReason(e.target.value)}
-                  className="mt-1 block w-full border rounded-md shadow-sm p-2 border-gray-300"
-                  placeholder="Enter reason for pending payment"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-md shadow-sm"
+                  required
                 />
               </div>
-            </div>
-            <div className="flex justify-end space-x-3 mt-6">
-              <button
-                onClick={() => setShowAddPendingModal(false)}
-                className="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-gray-700 hover:bg-gray-50"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={async () => {
-                  if (pendingAmount === '' || isNaN(pendingAmount) || Number(pendingAmount) < 0) {
-                    setPendingError('Pending amount must be zero or greater');
-                    return;
-                  }
-                  await addDoc(collection(db, 'receipts'), {
-                    customerName: pendingCustomer.names?.[0] || '',
-                    customerPhone: pendingCustomer.phone,
-                    totalAmount: Number(pendingAmount),
-                    paidAmount: 0,
-                    remainingAmount: Number(pendingAmount),
-                    date: new Date().toISOString(),
-                    paymentMethod: 'Manual Debt',
-                    items: [],
-                    isDebt: Number(pendingAmount) > 0,
-                    comment: pendingReason
-                  });
-                  setShowAddPendingModal(false);
-                  setPendingCustomer(null);
-                  setPendingAmount('');
-                  setPendingReason('');
-                  setPendingError('');
-                  fetchCustomerData();
-                }}
-                className="px-4 py-2 bg-orange-600 text-white rounded-md shadow-sm hover:bg-orange-700"
-              >
-                Add Pending
-              </button>
-            </div>
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-1">Date</label>
+                <input
+                  type="date"
+                  value={new Date().toISOString().split('T')[0]}
+                  disabled
+                  className="w-full px-4 py-2 border border-gray-300 rounded-md shadow-sm bg-gray-100 cursor-not-allowed"
+                />
+              </div>
+              {pendingError && <p className="text-red-600 text-xs mb-2">{pendingError}</p>}
+              <div className="flex justify-end space-x-3 mt-6">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowAddPendingModal(false);
+                    setPendingCustomer(null);
+                    setPendingAmount('');
+                    setPendingReason('');
+                    setPendingError('');
+                  }}
+                  className="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-gray-700 hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-orange-600 text-white rounded-md shadow-sm hover:bg-orange-700"
+                >
+                  Add Pending
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
@@ -832,4 +996,4 @@ function CustomerManagement() {
   );
 }
 
-export default CustomerManagement; 
+export default CustomerManagement;
