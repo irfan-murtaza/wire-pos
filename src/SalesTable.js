@@ -126,6 +126,7 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
         }
       });
 
+      
       const html = generatePrintableHTML({
         customerName: sale.customerName,
         customerPhone: sale.customerPhone,
