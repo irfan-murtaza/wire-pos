@@ -105,13 +105,26 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
         where('saleId', '==', sale.id),
         orderBy('date', 'desc')
       );
-      
       const querySnapshot = await getDocs(paymentHistoryQuery);
       const paymentHistory = querySnapshot.docs.map(doc => ({
         ...doc.data(),
         date: doc.data().date || new Date().toISOString(),
         amount: Math.round(doc.data().amount || 0)
       }));
+
+      // Fetch all receipts for this customer to calculate previous remaining (excluding current sale)
+      const allReceiptsQuery = query(
+        collection(db, 'receipts'),
+        where('customerPhone', '==', sale.customerPhone)
+      );
+      const allReceiptsSnapshot = await getDocs(allReceiptsQuery);
+      let previousRemaining = 0;
+      allReceiptsSnapshot.docs.forEach(doc => {
+        const data = doc.data();
+        if (data.billNumber !== sale.billNumber) {
+          previousRemaining += Number(data.remainingAmount || 0);
+        }
+      });
 
       const html = generatePrintableHTML({
         customerName: sale.customerName,
@@ -129,9 +142,10 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
         subtotal: sale.totalAmount + (sale.discountAmount || 0),
         paymentHistory: paymentHistory,
         billNumber: sale.billNumber,
-        builteNo: sale.builteNo || '-'
+        builteNo: sale.builteNo || '-',
+        previousRemaining
       });
-    
+
       const printWindow = window.open('', '_blank', 'width=800,height=600');
       printWindow.document.open();
       printWindow.document.write(html);
