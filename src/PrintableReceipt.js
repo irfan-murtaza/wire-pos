@@ -53,13 +53,14 @@ export function generatePrintableHTML({
 
     return `
       <div class="payment-history">
-        <h3>Payment History</h3>
+        <h3>Complete Customer Payment History</h3>
         <table>
           <thead>
             <tr>
               <th>Date</th>
               <th>Amount (PKR)</th>
               <th>Method</th>
+              <th>Bill No.</th>
               <th>Details</th>
               <th>Type</th>
             </tr>
@@ -70,6 +71,7 @@ export function generatePrintableHTML({
                 <td>${formatDate(payment.date)}</td>
                 <td>${Math.round(payment.amount)}</td>
                 <td>${payment.paymentMethod || payment.method || 'Cash'}</td>
+                <td>${payment.billNumber || '-'}</td>
                 <td>${payment.chequeNumber ? `Cheque #${payment.chequeNumber}` : payment.comment || '-'}</td>
                 <td>${payment.type}</td>
               </tr>
@@ -376,6 +378,7 @@ export function generatePrintableHTML({
             <div class="total-row"><span class="total-label">Paid Amount:</span><span class="total-value">${Math.round(paidAmount)} PKR</span></div>
             <div class="total-row"><span class="total-label">Total Remaining Amount:</span><span class="total-value">${Math.round(totalRemainingFinal)} PKR</span></div>
           </div>
+          ${generatePaymentHistoryTable(allPayments)}
           <div class="footer">
             Thank you for your business!
           </div>
