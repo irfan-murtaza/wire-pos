@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { collection, getDocs, query, orderBy, addDoc, where, doc, updateDoc, deleteDoc } from 'firebase/firestore';
+import React, { useState, useEffect, useCallback } from 'react';
+import { collection, getDocs, query, orderBy, where, doc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { db } from './firebase';
 import { generatePrintableHTML } from './PrintableReceipt';
 import jsPDF from 'jspdf';
@@ -15,15 +15,9 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
   const [productFilter, setProductFilter] = useState('');
   const [customerFilter, setCustomerFilter] = useState('');
   const [showOnlyDebt, setShowOnlyDebt] = useState(false);
-  const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [showPaymentHistory, setShowPaymentHistory] = useState(false);
   const [selectedSale, setSelectedSale] = useState(null);
-  const [paymentAmount, setPaymentAmount] = useState('');
-  const [paymentMethod, setPaymentMethod] = useState('Cash');
-  const [paymentComment, setPaymentComment] = useState('');
   const [paymentHistory, setPaymentHistory] = useState([]);
-  const [paymentErrors, setPaymentErrors] = useState({});
-  const [chequeNumber, setChequeNumber] = useState('');
   const [showEditModal, setShowEditModal] = useState(false);
   const [editSale, setEditSale] = useState(null);
 
@@ -38,11 +32,7 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
     fetchSales();
   }, [refreshTrigger]);
 
-  useEffect(() => {
-    filterSales();
-  }, [sales, selectedMonth, selectedYear, productFilter, customerFilter, showOnlyDebt]);
-
-  const filterSales = () => {
+  const filterSales = useCallback(() => {
     const filtered = sales.filter(sale => {
       const saleDate = new Date(sale.date);
       console.log("sales selected month: ", selectedMonth)
@@ -60,7 +50,11 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
       return monthMatch && yearMatch && productMatch && customerMatch && debtMatch;
     });
     setFilteredSales(filtered);
-  };
+  }, [sales, selectedMonth, selectedYear, productFilter, customerFilter, showOnlyDebt]);
+
+  useEffect(() => {
+    filterSales();
+  }, [filterSales]);
 
   const fetchSales = async () => {
     try {
@@ -99,18 +93,57 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
 
   const handlePrint = async (sale) => {
     try {
-      // Get payment history for the sale
+      // Get payment history for ALL sales of this customer
       const paymentHistoryQuery = query(
         collection(db, 'paymentHistory'),
-        where('saleId', '==', sale.id),
+        where('customerPhone', '==', sale.customerPhone),
         orderBy('date', 'desc')
       );
-      const querySnapshot = await getDocs(paymentHistoryQuery);
-      const paymentHistory = querySnapshot.docs.map(doc => ({
+      const paymentSnapshot = await getDocs(paymentHistoryQuery);
+      let customerPaymentHistory = paymentSnapshot.docs.map(doc => ({
         ...doc.data(),
         date: doc.data().date || new Date().toISOString(),
         amount: Math.round(doc.data().amount || 0)
       }));
+
+      // Also get payment information from all sales records for this customer
+      const customerSalesQuery = query(
+        collection(db, 'receipts'),
+        where('customerPhone', '==', sale.customerPhone),
+        orderBy('date', 'desc')
+      );
+      const customerSalesSnapshot = await getDocs(customerSalesQuery);
+      
+      // Extract initial payments from sales records
+      customerSalesSnapshot.docs.forEach(doc => {
+        const saleData = doc.data();
+        const paidAmount = saleData.paidAmount || 0;
+        
+        if (paidAmount > 0) {
+          // Check if this initial payment is not already in paymentHistory
+          const existingInitialPayment = customerPaymentHistory.find(
+            payment => payment.saleId === doc.id && payment.type === 'Initial Payment'
+          );
+          
+          if (!existingInitialPayment) {
+            customerPaymentHistory.push({
+              amount: paidAmount,
+              method: saleData.paymentMethod || 'Cash',
+              paymentMethod: saleData.paymentMethod || 'Cash',
+              date: saleData.date,
+              chequeNumber: saleData.chequeNumber || '',
+              comment: saleData.comment || '',
+              type: 'Initial Payment',
+              saleId: doc.id,
+              customerPhone: saleData.customerPhone,
+              billNumber: saleData.billNumber
+            });
+          }
+        }
+      });
+
+      // Sort all payments by date (newest first)
+      customerPaymentHistory = customerPaymentHistory.sort((a, b) => new Date(b.date) - new Date(a.date));
 
       // Fetch all receipts for this customer to calculate previous remaining (excluding current sale)
       const allReceiptsQuery = query(
@@ -141,7 +174,7 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
         discount: sale.discount || 0,
         discountAmount: sale.discountAmount || 0,
         subtotal: sale.totalAmount + (sale.discountAmount || 0),
-        paymentHistory: paymentHistory,
+        paymentHistory: customerPaymentHistory,
         billNumber: sale.billNumber,
         builteNo: sale.builteNo || '-',
         previousRemaining

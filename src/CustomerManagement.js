@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { collection, getDocs, query, orderBy, where, addDoc, doc, updateDoc } from 'firebase/firestore';
 import { db } from './firebase';
 import { generatePrintableHTML } from './PrintableReceipt';
+import jsPDF from 'jspdf';
 
 function CustomerManagement() {
   const [customers, setCustomers] = useState({});
@@ -32,6 +33,7 @@ function CustomerManagement() {
   const [printCustomer, setPrintCustomer] = useState(null);
   const [previousDayDebt, setPreviousDayDebt] = useState(0);
   const [printDate, setPrintDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [paymentHistory, setPaymentHistory] = useState([]);
 
   useEffect(() => {
     fetchCustomerData();
@@ -39,6 +41,7 @@ function CustomerManagement() {
 
   const fetchCustomerData = async () => {
     try {
+      console.log('Fetching customer data...');
       const salesQuery = query(collection(db, 'receipts'), orderBy('date', 'desc'));
       const querySnapshot = await getDocs(salesQuery);
       const salesList = querySnapshot.docs.map(doc => ({
@@ -46,11 +49,39 @@ function CustomerManagement() {
         ...doc.data()
       }));
 
+      console.log('Raw sales data:', salesList);
+
+      // Debug: Log first few sales to understand structure
+      console.log('=== SALES DATA STRUCTURE DEBUG ===');
+      salesList.slice(0, 3).forEach((sale, index) => {
+        console.log(`Sale ${index + 1}:`, {
+          id: sale.id,
+          customerName: sale.customerName,
+          customerPhone: sale.customerPhone,
+          totalAmount: sale.totalAmount,
+          paidAmount: sale.paidAmount,
+          remainingAmount: sale.remainingAmount,
+          items: sale.items,
+          date: sale.date,
+          paymentMethod: sale.paymentMethod,
+          fullSale: sale
+        });
+      });
+      console.log('=== END SALES STRUCTURE DEBUG ===');
+
       // Group sales by customer
       const customerData = {};
       salesList.forEach(sale => {
         const customerKey = sale.customerPhone;
+        
+        // Skip sales without customer phone
+        if (!customerKey || customerKey.trim() === '') {
+          console.log('Skipping sale without customerPhone:', sale);
+          return;
+        }
+        
         const cleanName = sale.customerName ? sale.customerName.trim() : '';
+        
         if (!customerData[customerKey]) {
           customerData[customerKey] = {
             names: cleanName ? [cleanName] : [],
@@ -61,38 +92,48 @@ function CustomerManagement() {
             sales: [sale],
             items: {}
           };
-          sale.items.forEach(item => {
-            const itemKey = item.name;
-            customerData[customerKey].items[itemKey] = {
-              name: item.name,
-              totalQuantity: item.quantity || 0,
-              totalValue: (item.quantity || 0) * (item.price || 0)
-            };
-          });
+          
+          // Process items if they exist
+          if (sale.items && Array.isArray(sale.items)) {
+            sale.items.forEach(item => {
+              const itemKey = item.name;
+              customerData[customerKey].items[itemKey] = {
+                name: item.name,
+                totalQuantity: item.quantity || 0,
+                totalValue: (item.quantity || 0) * (item.price || 0)
+              };
+            });
+          }
         } else {
           // Add name if not already present (case-insensitive, trimmed)
           if (cleanName && !customerData[customerKey].names.some(n => n.trim().toLowerCase() === cleanName.toLowerCase())) {
             customerData[customerKey].names.push(cleanName);
           }
+          
           customerData[customerKey].totalAmount += sale.totalAmount || 0;
           customerData[customerKey].paidAmount += sale.paidAmount || 0;
           customerData[customerKey].remainingAmount += sale.remainingAmount || 0;
           customerData[customerKey].sales.push(sale);
-          sale.items.forEach(item => {
-            const itemKey = item.name;
-            if (!customerData[customerKey].items[itemKey]) {
-              customerData[customerKey].items[itemKey] = {
-                name: item.name,
-                totalQuantity: 0,
-                totalValue: 0
-              };
-            }
-            customerData[customerKey].items[itemKey].totalQuantity += item.quantity || 0;
-            customerData[customerKey].items[itemKey].totalValue += (item.quantity || 0) * (item.price || 0);
-          });
+          
+          // Process items if they exist
+          if (sale.items && Array.isArray(sale.items)) {
+            sale.items.forEach(item => {
+              const itemKey = item.name;
+              if (!customerData[customerKey].items[itemKey]) {
+                customerData[customerKey].items[itemKey] = {
+                  name: item.name,
+                  totalQuantity: 0,
+                  totalValue: 0
+                };
+              }
+              customerData[customerKey].items[itemKey].totalQuantity += item.quantity || 0;
+              customerData[customerKey].items[itemKey].totalValue += (item.quantity || 0) * (item.price || 0);
+            });
+          }
         }
       });
 
+      console.log('Processed customer data:', customerData);
       setCustomers(customerData);
     } catch (error) {
       console.error('Error fetching customer data:', error);
@@ -117,11 +158,10 @@ function CustomerManagement() {
   const isPrintDate = (dateString) => {
     const selected = new Date(printDate);
     const saleDate = new Date(dateString);
-    // Normalize both dates to local year, month, day
+    // Check for same year and month (not specific day)
     return (
       selected.getFullYear() === saleDate.getFullYear() &&
-      selected.getMonth() === saleDate.getMonth() &&
-      selected.getDate() === saleDate.getDate()
+      selected.getMonth() === saleDate.getMonth()
     );
   };
 
@@ -159,12 +199,14 @@ function CustomerManagement() {
       });
     }
     const totalAmount = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-    // Calculate paid amount for the selected date
-    const paidAmountForSelectedDate = customer.sales
+    // Calculate paid amount for the selected month
+    const paidAmountForSelectedMonth = customer.sales
       .filter(sale => sale.paidAmount && sale.paidAmount > 0 && sale.paymentMethod !== 'Manual Debt' && isPrintDate(sale.date))
       .reduce((sum, sale) => sum + sale.paidAmount, 0);
     // Calculate remaining amount for the receipt
-    const remainingAmount = totalAmount - paidAmountForSelectedDate;
+    const remainingAmount = totalAmount - paidAmountForSelectedMonth;
+    
+    // Get payment history for the selected month
     const paymentHistory = customer.sales
       .filter(sale => sale.paidAmount && sale.paidAmount > 0 && sale.paymentMethod !== 'Manual Debt' && isPrintDate(sale.date))
       .map(sale => ({
@@ -180,9 +222,9 @@ function CustomerManagement() {
       customerPhone: customer.phone,
       items,
       totalAmount,
-      paidAmount: paidAmountForSelectedDate,
+      paidAmount: paidAmountForSelectedMonth,
       remainingAmount,
-      date: printDate,
+      date: `${new Date(printDate).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })} Report`,
       isCustomerReport: true,
       subtotal: totalAmount,
       paymentMethod: 'Customer Report',
@@ -227,12 +269,14 @@ function CustomerManagement() {
     });
     // Calculate total amount (products + manual debts)
     const totalAmount = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-    // Calculate paid amount for the selected date
-    const paidAmountForSelectedDate = customer.sales
+    // Calculate paid amount for the selected month
+    const paidAmountForSelectedMonth = customer.sales
       .filter(sale => sale.paidAmount && sale.paidAmount > 0 && sale.paymentMethod !== 'Manual Debt' && isPrintDate(sale.date))
       .reduce((sum, sale) => sum + sale.paidAmount, 0);
     // Calculate remaining amount for the receipt
-    const remainingAmount = totalAmount - paidAmountForSelectedDate;
+    const remainingAmount = totalAmount - paidAmountForSelectedMonth;
+    
+    // Get payment history for the selected month
     const paymentHistory = customer.sales
       .filter(sale => sale.paidAmount && sale.paidAmount > 0 && sale.paymentMethod !== 'Manual Debt' && isPrintDate(sale.date))
       .map(sale => ({
@@ -248,9 +292,9 @@ function CustomerManagement() {
       customerPhone: customer.phone,
       items,
       totalAmount,
-      paidAmount: paidAmountForSelectedDate,
+      paidAmount: paidAmountForSelectedMonth,
       remainingAmount,
-      date: new Date().toISOString(),
+      date: `${new Date(printDate).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })} Report`,
       isCustomerReport: true,
       subtotal: totalAmount,
       paymentMethod: 'Customer Report',
@@ -267,9 +311,48 @@ function CustomerManagement() {
     };
   };
 
-  const handleViewDetails = (customer) => {
-    setSelectedCustomer(customer);
-    setShowDetails(true);
+  const handleViewDetails = async (customer) => {
+    try {
+      // Fetch payment history for this customer from paymentHistory collection
+      const paymentQuery = query(
+        collection(db, 'paymentHistory'),
+        where('customerPhone', '==', customer.phone),
+        orderBy('date', 'desc')
+      );
+      const paymentSnapshot = await getDocs(paymentQuery);
+      const paymentHistory = paymentSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      
+      // Extract payment information from sales records
+      const salesPayments = customer.sales
+        .filter(sale => sale.paidAmount && sale.paidAmount > 0) // Only sales with payments
+        .map(sale => ({
+          id: `sale_${sale.id}`,
+          date: sale.date,
+          amount: sale.paidAmount,
+          paymentMethod: sale.paymentMethod || 'Cash',
+          chequeNumber: sale.chequeNumber || '',
+          comment: sale.comment || '',
+          type: 'Sale Payment',
+          fromSale: true
+        }));
+      
+      // Combine both payment sources and sort by date (newest first)
+      const allPayments = [...paymentHistory, ...salesPayments]
+        .sort((a, b) => new Date(b.date) - new Date(a.date));
+      
+      setPaymentHistory(allPayments);
+      setSelectedCustomer(customer);
+      setShowDetails(true);
+    } catch (error) {
+      console.error('Error fetching payment history:', error);
+      // Still show details even if payment history fails to load
+      setPaymentHistory([]);
+      setSelectedCustomer(customer);
+      setShowDetails(true);
+    }
   };
 
   const handleViewSaleDetails = (sale) => {
@@ -405,16 +488,300 @@ function CustomerManagement() {
     };
   };
 
-  const filteredCustomers = Object.values(customers).filter(customer =>
-    (customer.name?.toLowerCase().includes(searchTerm.toLowerCase()) || false) ||
-    (customer.phone?.includes(searchTerm) || false)
-  );
+  const filteredCustomers = Object.values(customers).filter(customer => {
+    if (!searchTerm) return true; // Show all customers when no search term
+    
+    const nameMatch = customer.names?.some(name => 
+      name.toLowerCase().includes(searchTerm.toLowerCase())
+    ) || false;
+    
+    const phoneMatch = customer.phone?.includes(searchTerm) || false;
+    
+    return nameMatch || phoneMatch;
+  });
 
-  // Add console log for debugging
+  // Enhanced debugging
   useEffect(() => {
+    console.log('=== CUSTOMER DATA DEBUG ===');
     console.log('Search term:', searchTerm);
-    console.log('Filtered customers:', filteredCustomers);
-  }, [searchTerm, filteredCustomers]);
+    console.log('Total customers in state:', Object.keys(customers).length);
+    console.log('Customers object keys:', Object.keys(customers));
+    console.log('Filtered customers count:', filteredCustomers.length);
+    
+    // Log first customer details if available
+    if (filteredCustomers.length > 0) {
+      const firstCustomer = filteredCustomers[0];
+      console.log('First customer DETAILED:', {
+        names: firstCustomer.names,
+        phone: firstCustomer.phone,
+        totalAmount: firstCustomer.totalAmount,
+        paidAmount: firstCustomer.paidAmount,
+        remainingAmount: firstCustomer.remainingAmount,
+        salesCount: firstCustomer.sales?.length,
+        fullCustomerObject: firstCustomer
+      });
+      
+      // Log the first sale for this customer to understand structure
+      if (firstCustomer.sales && firstCustomer.sales.length > 0) {
+        console.log('First sale for first customer:', firstCustomer.sales[0]);
+      }
+    }
+    
+    // Log all customers briefly
+    console.log('All customers summary:');
+    Object.entries(customers).forEach(([key, customer], index) => {
+      console.log(`Customer ${index + 1} (${key}):`, {
+        names: customer.names,
+        phone: customer.phone,
+        total: customer.totalAmount,
+        paid: customer.paidAmount,
+        remaining: customer.remainingAmount,
+        salesCount: customer.sales?.length
+      });
+    });
+    
+    console.log('=== END DEBUG ===');
+  }, [searchTerm, filteredCustomers, customers]);
+
+  const handleAddCustomer = async (e) => {
+    e.preventDefault();
+    const errors = {};
+    
+    if (!newCustomer.name.trim()) {
+      errors.name = 'Customer name is required';
+    }
+    if (!newCustomer.phone.trim()) {
+      errors.phone = 'Phone number is required';
+    }
+    if (newCustomer.pendingAmount && isNaN(Number(newCustomer.pendingAmount))) {
+      errors.pendingAmount = 'Please enter a valid amount';
+    }
+    if (newCustomer.pendingAmount && !newCustomerReason.trim()) {
+      errors.reason = 'Reason is required when adding pending amount';
+    }
+    
+    setAddCustomerErrors(errors);
+    if (Object.keys(errors).length > 0) return;
+
+    try {
+      // Add new customer as a receipt with the pending amount if provided
+      const receiptData = {
+        customerName: newCustomer.name.trim(),
+        customerPhone: newCustomer.phone.trim(),
+        totalAmount: Number(newCustomer.pendingAmount) || 0,
+        paidAmount: 0,
+        remainingAmount: Number(newCustomer.pendingAmount) || 0,
+        date: new Date().toISOString(),
+        paymentMethod: newCustomer.pendingAmount ? 'Manual Debt' : 'Cash',
+        comment: newCustomerReason.trim() || 'New customer added',
+        items: [],
+        isDebt: Number(newCustomer.pendingAmount) > 0
+      };
+
+      await addDoc(collection(db, 'receipts'), receiptData);
+      
+      // Reset form and close modal
+      setNewCustomer({ name: '', phone: '', pendingAmount: '' });
+      setNewCustomerReason('');
+      setAddCustomerErrors({});
+      setShowAddCustomerModal(false);
+      
+      // Refresh customer data
+      fetchCustomerData();
+    } catch (error) {
+      console.error('Error adding customer:', error);
+      alert('Error adding customer: ' + error.message);
+    }
+  };
+
+  // Download customer details as PDF file
+  const handleDownloadCustomerDetails = async (customer) => {
+    try {
+      const customerName = (customer.names && customer.names[0]) || customer.phone || 'Unknown';
+      
+      // Fetch payment history for this customer
+      const paymentQuery = query(
+        collection(db, 'paymentHistory'),
+        where('customerPhone', '==', customer.phone),
+        orderBy('date', 'desc')
+      );
+      const paymentSnapshot = await getDocs(paymentQuery);
+      const paymentHistory = paymentSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      
+      // Extract payment information from sales records
+      const salesPayments = customer.sales
+        .filter(sale => sale.paidAmount && sale.paidAmount > 0) // Only sales with payments
+        .map(sale => ({
+          id: `sale_${sale.id}`,
+          date: sale.date,
+          amount: sale.paidAmount,
+          paymentMethod: sale.paymentMethod || 'Cash',
+          chequeNumber: sale.chequeNumber || '',
+          comment: sale.comment || '',
+          type: 'Sale Payment',
+          fromSale: true
+        }));
+      
+      // Combine both payment sources and sort by date (newest first)
+      const allPayments = [...paymentHistory, ...salesPayments]
+        .sort((a, b) => new Date(b.date) - new Date(a.date));
+      
+      // Create new PDF document
+      const doc = new jsPDF();
+      
+      // Set font and add title
+      doc.setFontSize(16);
+      doc.setFont('helvetica', 'bold');
+      doc.text('CUSTOMER DETAILS REPORT', 20, 20);
+      
+      // Add a line under title
+      doc.setLineWidth(0.5);
+      doc.line(20, 25, 190, 25);
+      
+      let yPosition = 40;
+      
+      // Customer basic info
+      doc.setFontSize(12);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Customer Information:', 20, yPosition);
+      yPosition += 10;
+      
+      doc.setFont('helvetica', 'normal');
+      doc.text(`Name: ${customer.names?.join(', ') || 'N/A'}`, 20, yPosition);
+      yPosition += 8;
+      doc.text(`Phone: ${customer.phone}`, 20, yPosition);
+      yPosition += 8;
+      doc.text(`Total Amount: Rs ${Math.round(customer.totalAmount).toLocaleString()}`, 20, yPosition);
+      yPosition += 8;
+      doc.text(`Paid Amount: Rs ${Math.round(customer.paidAmount).toLocaleString()}`, 20, yPosition);
+      yPosition += 8;
+      doc.text(`Remaining Amount: Rs ${Math.round(customer.remainingAmount).toLocaleString()}`, 20, yPosition);
+      yPosition += 20;
+      
+      // Payment History Section
+      if (allPayments.length > 0) {
+        if (yPosition > 250) {
+          doc.addPage();
+          yPosition = 20;
+        }
+        
+        doc.setFont('helvetica', 'bold');
+        doc.text('Payment History:', 20, yPosition);
+        yPosition += 10;
+        
+        doc.setFont('helvetica', 'normal');
+        allPayments.forEach((payment, index) => {
+          if (yPosition > 270) {
+            doc.addPage();
+            yPosition = 20;
+          }
+          
+          doc.text(`${index + 1}. Date: ${new Date(payment.date).toLocaleDateString()} ${new Date(payment.date).toLocaleTimeString()}`, 20, yPosition);
+          yPosition += 6;
+          doc.text(`   Amount Paid: Rs ${Math.round(payment.amount).toLocaleString()}`, 20, yPosition);
+          yPosition += 6;
+          doc.text(`   Payment Method: ${payment.paymentMethod || 'N/A'}`, 20, yPosition);
+          yPosition += 6;
+          if (payment.chequeNumber) {
+            doc.text(`   Cheque Number: ${payment.chequeNumber}`, 20, yPosition);
+            yPosition += 6;
+          }
+          if (payment.comment) {
+            doc.text(`   Comment: ${payment.comment}`, 20, yPosition);
+            yPosition += 6;
+          }
+          doc.text(`   Type: ${payment.type || 'Payment'}`, 20, yPosition);
+          yPosition += 10;
+        });
+        yPosition += 10;
+      }
+      
+      // Purchase History
+      if (yPosition > 250) {
+        doc.addPage();
+        yPosition = 20;
+      }
+      
+      doc.setFont('helvetica', 'bold');
+      doc.text('Purchase History:', 20, yPosition);
+      yPosition += 10;
+      
+      doc.setFont('helvetica', 'normal');
+      customer.sales.forEach((sale, index) => {
+        if (yPosition > 270) { // Check if we need a new page
+          doc.addPage();
+          yPosition = 20;
+        }
+        
+        doc.text(`${index + 1}. Date: ${new Date(sale.date).toLocaleDateString()}`, 20, yPosition);
+        yPosition += 6;
+        doc.text(`   Total: Rs ${Math.round(sale.totalAmount).toLocaleString()}`, 20, yPosition);
+        yPosition += 6;
+        doc.text(`   Paid: Rs ${Math.round(sale.paidAmount || 0).toLocaleString()}`, 20, yPosition);
+        yPosition += 6;
+        doc.text(`   Remaining: Rs ${Math.round(sale.remainingAmount || 0).toLocaleString()}`, 20, yPosition);
+        yPosition += 6;
+        doc.text(`   Payment Method: ${sale.paymentMethod || 'N/A'}`, 20, yPosition);
+        yPosition += 6;
+        
+        if (sale.chequeNumber) {
+          doc.text(`   Cheque Number: ${sale.chequeNumber}`, 20, yPosition);
+          yPosition += 6;
+        }
+        if (sale.comment) {
+          doc.text(`   Comment: ${sale.comment}`, 20, yPosition);
+          yPosition += 6;
+        }
+        
+        if (sale.items && Array.isArray(sale.items) && sale.items.length > 0) {
+          doc.text('   Items:', 20, yPosition);
+          yPosition += 6;
+          sale.items.forEach(item => {
+            if (yPosition > 270) { // Check if we need a new page
+              doc.addPage();
+              yPosition = 20;
+            }
+            doc.text(`   - ${item.name}: ${item.quantity} x Rs ${Math.round(item.price).toLocaleString()} = Rs ${Math.round(item.quantity * item.price).toLocaleString()}`, 25, yPosition);
+            yPosition += 6;
+          });
+        }
+        yPosition += 8; // Extra space between sales
+      });
+      
+      // Product Summary
+      if (Object.keys(customer.items).length > 0) {
+        if (yPosition > 250) { // Check if we need a new page
+          doc.addPage();
+          yPosition = 20;
+        }
+        
+        yPosition += 10;
+        doc.setFont('helvetica', 'bold');
+        doc.text('Product Summary:', 20, yPosition);
+        yPosition += 10;
+        
+        doc.setFont('helvetica', 'normal');
+        Object.values(customer.items).forEach(item => {
+          if (yPosition > 270) { // Check if we need a new page
+            doc.addPage();
+            yPosition = 20;
+          }
+          doc.text(`${item.name}: ${item.totalQuantity} units, Total Value: Rs ${Math.round(item.totalValue).toLocaleString()}`, 20, yPosition);
+          yPosition += 8;
+        });
+      }
+      
+      // Save the PDF
+      const fileName = `customer_${customerName.replace(/[^a-zA-Z0-9]/g, '_')}_${new Date().toISOString().split('T')[0]}.pdf`;
+      doc.save(fileName);
+    } catch (error) {
+      console.error('Error generating PDF:', error);
+      alert('Error generating PDF. Please try again.');
+    }
+  };
 
   if (loading) {
     return (
@@ -448,106 +815,160 @@ function CustomerManagement() {
       </div>
 
       <div className="bg-white rounded-lg shadow overflow-hidden">
-        <table className="min-w-full divide-y divide-gray-200">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Names</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Customer</th>
-              <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Total (PKR)</th>
-              <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Paid (PKR)</th>
-              <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Remaining (PKR)</th>
-              <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="bg-white divide-y divide-gray-200">
-            {filteredCustomers.map((customer, index) => (
-              <tr key={index} className={`hover:bg-gray-50 ${customer.remainingAmount > 0 ? 'bg-red-50' : customer.remainingAmount < 0 ? 'bg-green-50' : ''}`}>
-                <td className="px-6 py-4 whitespace-nowrap">
-                  <div className="text-sm text-gray-900">{customer.names?.join(', ')}</div>
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap">
-                  <div className="text-sm font-medium text-gray-900">{customer.phone}</div>
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-right">
-                  {Math.round(customer.totalAmount)}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-right">
-                  {Math.round(customer.paidAmount)}
-                </td>
-                <td className={`px-6 py-4 whitespace-nowrap text-sm text-right ${customer.remainingAmount > 0 ? 'text-green-600' : customer.remainingAmount < 0 ? 'text-red-600' : 'text-gray-900'}`}>
-                  {customer.remainingAmount !== 0 ? Math.round(customer.remainingAmount) : '-'}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-center space-x-2">
-                  <button
-                    onClick={() => { setPrintCustomer(customer); setShowPrintModal(true); }}
-                    className="text-blue-600 hover:text-blue-800"
-                    title="Print Report"
-                  >
-                    <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
-                    </svg>
-                  </button>
-                  <button
-                    onClick={() => handleViewDetails(customer)}
-                    className="text-purple-600 hover:text-purple-800 ml-2"
-                    title="View Details"
-                  >
-                    <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                    </svg>
-                  </button>
-                  <button
-                    onClick={() => handleAddPaymentClick(customer)}
-                    className="ml-2 text-green-600 hover:text-green-800"
-                    title="Add Payment"
-                  >
-                    <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                  </button>
-                  <button
-                    onClick={() => {
-                      console.log('Opening add pending modal for customer:', customer.phone);
-                      // Close all modals first
-                      setShowDetails(false);
-                      setShowSaleDetails(false);
-                      setShowPaymentModal(false);
-                      setShowAddCustomerModal(false);
-                      setShowPrintModal(false);
-                      
-                      // Reset all modal-related states
-                      setSelectedCustomer(null);
-                      setSelectedSale(null);
-                      setPrintCustomer(null);
-                      setPaymentCustomer(null);
-                      
-                      // Then open add pending modal
-                      setPendingCustomer(customer);
-                      setPendingAmount('');
-                      setPendingReason('');
-                      setPendingError('');
-                      setShowAddPendingModal(true);
-                    }}
-                    className="ml-2 text-orange-600 hover:text-orange-800"
-                    title="Add Pending Payment"
-                  >
-                    <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                    </svg>
-                  </button>
-                </td>
+        {/* Add horizontal scrolling container */}
+        <div className="overflow-x-auto">
+          <table className="min-w-full divide-y divide-gray-200">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-48 max-w-48">Names</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-32">Phone</th>
+                <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider w-32">Total (PKR)</th>
+                <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider w-32">Paid (PKR)</th>
+                <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider w-32">Remaining (PKR)</th>
+                <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider w-40">Actions</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody className="bg-white divide-y divide-gray-200">
+              {filteredCustomers.length === 0 ? (
+                <tr>
+                  <td colSpan="6" className="px-6 py-4 text-center text-gray-500">
+                    {Object.keys(customers).length === 0 
+                      ? 'No customers found. Add your first customer or check if data is loading properly.'
+                      : 'No customers match your search criteria.'}
+                  </td>
+                </tr>
+              ) : (
+                filteredCustomers.map((customer, index) => {
+                  console.log(`Rendering customer ${index + 1}:`, customer.names?.[0], customer.totalAmount);
+                  return (
+                  <tr key={index} className={`hover:bg-gray-50 ${customer.remainingAmount > 0 ? 'bg-red-50' : customer.remainingAmount < 0 ? 'bg-green-50' : ''}`}>
+                    <td className="px-4 py-4 w-48 max-w-48">
+                      <div className="text-sm text-gray-900 font-medium break-words">{customer.names?.join(', ') || 'N/A'}</div>
+                    </td>
+                    <td className="px-4 py-4 whitespace-nowrap w-32">
+                      <div className="text-sm font-medium text-gray-900">{customer.phone || 'N/A'}</div>
+                    </td>
+                    <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900 text-right font-medium w-32">
+                      Rs {customer.totalAmount !== undefined ? Math.round(customer.totalAmount).toLocaleString() : '0'}
+                    </td>
+                    <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900 text-right font-medium w-32">
+                      Rs {customer.paidAmount !== undefined ? Math.round(customer.paidAmount).toLocaleString() : '0'}
+                    </td>
+                    <td className={`px-4 py-4 whitespace-nowrap text-sm text-right font-medium w-32 ${customer.remainingAmount > 0 ? 'text-red-600' : customer.remainingAmount < 0 ? 'text-green-600' : 'text-gray-900'}`}>
+                      {customer.remainingAmount !== undefined && customer.remainingAmount !== 0 ? `Rs ${Math.round(customer.remainingAmount).toLocaleString()}` : '-'}
+                    </td>
+                    <td className="px-4 py-4 whitespace-nowrap text-sm text-center space-x-1 w-40">
+                      {/* Download Button */}
+                      <button
+                        onClick={() => handleDownloadCustomerDetails(customer)}
+                        className="text-blue-600 hover:text-blue-800 p-1 rounded"
+                        title="Download Customer Details as PDF"
+                      >
+                        <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                        </svg>
+                      </button>
+                      
+                      {/* Print Button for Monthly Data */}
+                      <button
+                        onClick={() => {
+                          // Close all other modals first
+                          setShowDetails(false);
+                          setShowSaleDetails(false);
+                          setShowPaymentModal(false);
+                          setShowAddCustomerModal(false);
+                          setShowAddPendingModal(false);
+                          
+                          // Reset states
+                          setSelectedCustomer(null);
+                          setSelectedSale(null);
+                          setPaymentCustomer(null);
+                          setPendingCustomer(null);
+                          
+                          // Open print modal
+                          setPrintCustomer(customer);
+                          setPrintDate(new Date().toISOString().split('T')[0]);
+                          setPreviousDayDebt(0);
+                          setShowPrintModal(true);
+                        }}
+                        className="text-gray-600 hover:text-gray-800 p-1 rounded"
+                        title="Print Monthly Customer Report"
+                      >
+                        <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
+                        </svg>
+                      </button>
+                      
+                      {/* View Details Button */}
+                      <button
+                        onClick={() => handleViewDetails(customer)}
+                        className="text-purple-600 hover:text-purple-800 p-1 rounded"
+                        title="View Details"
+                      >
+                        <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                        </svg>
+                      </button>
+                      
+                      {/* Add Payment Button */}
+                      <button
+                        onClick={() => handleAddPaymentClick(customer)}
+                        className="text-green-600 hover:text-green-800 p-1 rounded"
+                        title="Add Payment (Reduces Remaining Amount)"
+                      >
+                        <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                      </button>
+                      
+                      {/* Add Pending Payment Button */}
+                      <button
+                        onClick={() => {
+                          console.log('Opening add pending modal for customer:', customer.phone);
+                          // Close all modals first
+                          setShowDetails(false);
+                          setShowSaleDetails(false);
+                          setShowPaymentModal(false);
+                          setShowAddCustomerModal(false);
+                          setShowPrintModal(false);
+                          
+                          // Reset all modal-related states
+                          setSelectedCustomer(null);
+                          setSelectedSale(null);
+                          setPrintCustomer(null);
+                          setPaymentCustomer(null);
+                          
+                          // Then open add pending modal
+                          setPendingCustomer(customer);
+                          setPendingAmount('');
+                          setPendingReason('');
+                          setPendingError('');
+                          setShowAddPendingModal(true);
+                        }}
+                        className="text-orange-600 hover:text-orange-800 p-1 rounded"
+                        title="Add Pending Payment (Increases Remaining Amount)"
+                      >
+                        <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                        </svg>
+                      </button>
+                    </td>
+                  </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       {/* Customer Details Modal */}
       {showDetails && selectedCustomer && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-6xl p-6">
-            <div className="flex justify-between items-center mb-6">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-6xl h-[90vh] flex flex-col">
+            {/* Fixed Header */}
+            <div className="flex justify-between items-center p-6 border-b border-gray-200">
               <div>
                 <h3 className="text-xl font-semibold text-gray-900">Customer Details</h3>
                 <p className="text-sm text-gray-500 mt-1">Name: {selectedCustomer.name}</p>
@@ -574,97 +995,156 @@ function CustomerManagement() {
               </div>
             </div>
 
-            <div className="space-y-6">
-              {/* Summary Section */}
-              <div className="bg-gray-50 rounded-lg p-4">
-                <h4 className="text-lg font-medium text-gray-900 mb-4">Summary</h4>
-                <div className="grid grid-cols-3 gap-4">
-                  <div className="bg-white p-4 rounded-lg shadow">
-                    <div className="text-sm text-gray-500">Total Amount</div>
-                    <div className="text-xl font-semibold text-gray-900">
-                      Rs {Math.round(selectedCustomer.totalAmount)}
+            {/* Scrollable Content */}
+            <div className="flex-1 overflow-y-auto p-6">
+              <div className="space-y-6">
+                {/* Summary Section */}
+                <div className="bg-gray-50 rounded-lg p-4">
+                  <h4 className="text-lg font-medium text-gray-900 mb-4">Summary</h4>
+                  <div className="grid grid-cols-3 gap-4">
+                    <div className="bg-white p-4 rounded-lg shadow">
+                      <div className="text-sm text-gray-500">Total Amount</div>
+                      <div className="text-xl font-semibold text-gray-900">
+                        Rs {Math.round(selectedCustomer.totalAmount)}
+                      </div>
                     </div>
-                  </div>
-                  <div className="bg-white p-4 rounded-lg shadow">
-                    <div className="text-sm text-gray-500">Total Paid</div>
-                    <div className="text-xl font-semibold text-gray-900">
-                      Rs {Math.round(selectedCustomer.paidAmount)}
+                    <div className="bg-white p-4 rounded-lg shadow">
+                      <div className="text-sm text-gray-500">Total Paid</div>
+                      <div className="text-xl font-semibold text-gray-900">
+                        Rs {Math.round(selectedCustomer.paidAmount)}
+                      </div>
                     </div>
-                  </div>
-                  <div className="bg-white p-4 rounded-lg shadow">
-                    <div className="text-sm text-gray-500">Remaining Amount</div>
-                    <div className={`text-xl font-semibold ${selectedCustomer.remainingAmount > 0 ? 'text-green-600' : selectedCustomer.remainingAmount < 0 ? 'text-red-600' : 'text-gray-900'}`}>
-                      Rs {Math.round(selectedCustomer.remainingAmount)}
+                    <div className="bg-white p-4 rounded-lg shadow">
+                      <div className="text-sm text-gray-500">Remaining Amount</div>
+                      <div className={`text-xl font-semibold ${selectedCustomer.remainingAmount > 0 ? 'text-green-600' : selectedCustomer.remainingAmount < 0 ? 'text-red-600' : 'text-gray-900'}`}>
+                        Rs {Math.round(selectedCustomer.remainingAmount)}
+                      </div>
                     </div>
                   </div>
                 </div>
-              </div>
 
-              {/* Sales History Section */}
-              <div className="bg-gray-50 rounded-lg p-4">
-                <h4 className="text-lg font-medium text-gray-900 mb-4">Sales History</h4>
-                <table className="w-full divide-y divide-gray-200">
-                  <thead className="bg-gray-100">
-                    <tr>
-                      <th className="w-1/5 px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Date & Time</th>
-                      <th className="w-1/5 px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Total (PKR)</th>
-                      <th className="w-1/5 px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Paid (PKR)</th>
-                      <th className="w-1/5 px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Remaining (PKR)</th>
-                      <th className="w-1/5 px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Payment Method</th>
-                      <th className="w-1/5 px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase">Details</th>
-                    </tr>
-                  </thead>
-                  <tbody className="bg-white divide-y divide-gray-200">
-                    {selectedCustomer.sales.map((sale, index) => (
-                      <tr key={index} className="hover:bg-gray-50">
-                        <td className="px-3 py-2 text-sm text-gray-500">
-                          {new Date(sale.date).toLocaleString('en-US', {
-                            year: 'numeric',
-                            month: 'short',
-                            day: 'numeric',
-                            hour: '2-digit',
-                            minute: '2-digit'
-                          })}
-                        </td>
-                        <td className="px-3 py-2 text-sm text-gray-900 text-right">
-                          {Math.round(sale.totalAmount)}
-                        </td>
-                        <td className="px-3 py-2 text-sm text-gray-900 text-right">
-                          {Math.round(sale.paidAmount || 0)}
-                        </td>
-                        <td className="px-3 py-2 text-sm text-red-600 text-right">
-                          {sale.remainingAmount > 0 ? Math.round(sale.remainingAmount) : '-'}
-                        </td>
-                        <td className="px-3 py-2 text-sm text-gray-500">
-                          {sale.paymentMethod}
-                          {sale.chequeNumber && ` (Cheque #${sale.chequeNumber})`}
-                          {sale.comment && ` - ${sale.comment}`}
-                        </td>
-                        <td className="px-3 py-2 text-sm text-center">
-                          <button
-                            onClick={() => handleViewSaleDetails(sale)}
-                            className="text-blue-600 hover:text-blue-800 mr-2"
-                            title="View Sale Details"
-                          >
-                            <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                            </svg>
-                          </button>
-                          <button
-                            onClick={() => handlePrintSale(sale, selectedCustomer)}
-                            className="text-green-600 hover:text-green-800"
-                            title="Print Sale Receipt"
-                          >
-                            <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
-                            </svg>
-                          </button>
-                        </td>
+                {/* Sales History Section */}
+                <div className="bg-gray-50 rounded-lg p-4">
+                  <h4 className="text-lg font-medium text-gray-900 mb-4">Sales History</h4>
+                  <table className="w-full divide-y divide-gray-200">
+                    <thead className="bg-gray-100">
+                      <tr>
+                        <th className="w-1/5 px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Date & Time</th>
+                        <th className="w-1/5 px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Total (PKR)</th>
+                        <th className="w-1/5 px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Paid (PKR)</th>
+                        <th className="w-1/5 px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Remaining (PKR)</th>
+                        <th className="w-1/5 px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Payment Method</th>
+                        <th className="w-1/5 px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase">Details</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {selectedCustomer.sales.map((sale, index) => (
+                        <tr key={index} className="hover:bg-gray-50">
+                          <td className="px-3 py-2 text-sm text-gray-500">
+                            {new Date(sale.date).toLocaleString('en-US', {
+                              year: 'numeric',
+                              month: 'short',
+                              day: 'numeric',
+                              hour: '2-digit',
+                              minute: '2-digit'
+                            })}
+                          </td>
+                          <td className="px-3 py-2 text-sm text-gray-900 text-right">
+                            {Math.round(sale.totalAmount)}
+                          </td>
+                          <td className="px-3 py-2 text-sm text-gray-900 text-right">
+                            {Math.round(sale.paidAmount || 0)}
+                          </td>
+                          <td className="px-3 py-2 text-sm text-red-600 text-right">
+                            {sale.remainingAmount > 0 ? Math.round(sale.remainingAmount) : '-'}
+                          </td>
+                          <td className="px-3 py-2 text-sm text-gray-500">
+                            {sale.paymentMethod}
+                            {sale.chequeNumber && ` (Cheque #${sale.chequeNumber})`}
+                            {sale.comment && ` - ${sale.comment}`}
+                          </td>
+                          <td className="px-3 py-2 text-sm text-center">
+                            <button
+                              onClick={() => handleViewSaleDetails(sale)}
+                              className="text-blue-600 hover:text-blue-800 mr-2"
+                              title="View Sale Details"
+                            >
+                              <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                              </svg>
+                            </button>
+                            <button
+                              onClick={() => handlePrintSale(sale, selectedCustomer)}
+                              className="text-green-600 hover:text-green-800"
+                              title="Print Sale Receipt"
+                            >
+                              <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
+                              </svg>
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Payment History Section */}
+                <div className="bg-gray-50 rounded-lg p-4">
+                  <h4 className="text-lg font-medium text-gray-900 mb-4">Payment History</h4>
+                  {paymentHistory.length > 0 ? (
+                    <table className="w-full divide-y divide-gray-200">
+                      <thead className="bg-gray-100">
+                        <tr>
+                          <th className="w-1/5 px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Date & Time</th>
+                          <th className="w-1/5 px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Amount Paid (PKR)</th>
+                          <th className="w-1/5 px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Payment Method</th>
+                          <th className="w-1/5 px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
+                          <th className="w-1/5 px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Details</th>
+                        </tr>
+                      </thead>
+                      <tbody className="bg-white divide-y divide-gray-200">
+                        {paymentHistory.map((payment, index) => (
+                          <tr key={index} className="hover:bg-gray-50">
+                            <td className="px-3 py-2 text-sm text-gray-500">
+                              {new Date(payment.date).toLocaleString('en-US', {
+                                year: 'numeric',
+                                month: 'short',
+                                day: 'numeric',
+                                hour: '2-digit',
+                                minute: '2-digit'
+                              })}
+                            </td>
+                            <td className="px-3 py-2 text-sm text-green-600 font-medium text-right">
+                              Rs {Math.round(payment.amount).toLocaleString()}
+                            </td>
+                            <td className="px-3 py-2 text-sm text-gray-900">
+                              {payment.paymentMethod}
+                              {payment.chequeNumber && ` (Cheque #${payment.chequeNumber})`}
+                            </td>
+                            <td className="px-3 py-2 text-sm">
+                              <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${
+                                payment.fromSale 
+                                  ? 'bg-blue-100 text-blue-800' 
+                                  : 'bg-green-100 text-green-800'
+                              }`}>
+                                {payment.type || 'Payment'}
+                              </span>
+                            </td>
+                            <td className="px-3 py-2 text-sm text-gray-500">
+                              {payment.comment || (payment.fromSale ? 'Payment made with sale' : 'Separate payment')}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  ) : (
+                    <div className="text-center py-8 text-gray-500">
+                      <p>No payment history found for this customer.</p>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           </div>
@@ -674,8 +1154,9 @@ function CustomerManagement() {
       {/* Sale Details Modal */}
       {showSaleDetails && selectedSale && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-4xl p-6">
-            <div className="flex justify-between items-center mb-6">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-4xl h-[80vh] flex flex-col">
+            {/* Fixed Header */}
+            <div className="flex justify-between items-center p-6 border-b border-gray-200">
               <div>
                 <h3 className="text-xl font-semibold text-gray-900">Sale Details</h3>
                 <p className="text-sm text-gray-500 mt-1">
@@ -698,47 +1179,50 @@ function CustomerManagement() {
               </button>
             </div>
 
-            <div className="space-y-6">
-              {/* Items Section */}
-              <div className="bg-gray-50 rounded-lg p-4">
-                <h4 className="text-lg font-medium text-gray-900 mb-4">Items Purchased</h4>
-                <table className="w-full divide-y divide-gray-200">
-                  <thead className="bg-gray-100">
-                    <tr>
-                      <th className="w-2/5 px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Product</th>
-                      <th className="w-1/5 px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Quantity</th>
-                      <th className="w-1/5 px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Unit Price (PKR)</th>
-                      <th className="w-1/5 px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Total (PKR)</th>
-                    </tr>
-                  </thead>
-                  <tbody className="bg-white divide-y divide-gray-200">
-                    {selectedSale.items.map((item, index) => (
-                      <tr key={index} className="hover:bg-gray-50">
-                        <td className="px-3 py-2 text-sm text-gray-900">{item.name}</td>
-                        <td className="px-3 py-2 text-sm text-gray-500 text-right">{item.quantity}</td>
-                        <td className="px-3 py-2 text-sm text-gray-900 text-right">{Math.round(item.price)}</td>
-                        <td className="px-3 py-2 text-sm text-gray-900 text-right">{Math.round(item.quantity * item.price)}</td>
+            {/* Scrollable Content */}
+            <div className="flex-1 overflow-y-auto p-6">
+              <div className="space-y-6">
+                {/* Items Section */}
+                <div className="bg-gray-50 rounded-lg p-4">
+                  <h4 className="text-lg font-medium text-gray-900 mb-4">Items Purchased</h4>
+                  <table className="w-full divide-y divide-gray-200">
+                    <thead className="bg-gray-100">
+                      <tr>
+                        <th className="w-2/5 px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Product</th>
+                        <th className="w-1/5 px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Quantity</th>
+                        <th className="w-1/5 px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Unit Price (PKR)</th>
+                        <th className="w-1/5 px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Total (PKR)</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {selectedSale.items.map((item, index) => (
+                        <tr key={index} className="hover:bg-gray-50">
+                          <td className="px-3 py-2 text-sm text-gray-900">{item.name}</td>
+                          <td className="px-3 py-2 text-sm text-gray-500 text-right">{item.quantity}</td>
+                          <td className="px-3 py-2 text-sm text-gray-900 text-right">{Math.round(item.price)}</td>
+                          <td className="px-3 py-2 text-sm text-gray-900 text-right">{Math.round(item.quantity * item.price)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
 
-              {/* Summary Section */}
-              <div className="bg-gray-50 rounded-lg p-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="bg-white p-4 rounded-lg shadow">
-                    <div className="text-sm text-gray-500">Payment Method</div>
-                    <div className="text-lg font-semibold text-gray-900">
-                      {selectedSale.paymentMethod}
-                      {selectedSale.chequeNumber && ` (Cheque #${selectedSale.chequeNumber})`}
-                      {selectedSale.comment && ` - ${selectedSale.comment}`}
+                {/* Summary Section */}
+                <div className="bg-gray-50 rounded-lg p-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="bg-white p-4 rounded-lg shadow">
+                      <div className="text-sm text-gray-500">Payment Method</div>
+                      <div className="text-lg font-semibold text-gray-900">
+                        {selectedSale.paymentMethod}
+                        {selectedSale.chequeNumber && ` (Cheque #${selectedSale.chequeNumber})`}
+                        {selectedSale.comment && ` - ${selectedSale.comment}`}
+                      </div>
                     </div>
-                  </div>
-                  <div className="bg-white p-4 rounded-lg shadow">
-                    <div className="text-sm text-gray-500">Total Amount</div>
-                    <div className="text-lg font-semibold text-gray-900">
-                      Rs {Math.round(selectedSale.totalAmount)}
+                    <div className="bg-white p-4 rounded-lg shadow">
+                      <div className="text-sm text-gray-500">Total Amount</div>
+                      <div className="text-lg font-semibold text-gray-900">
+                        Rs {Math.round(selectedSale.totalAmount)}
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -759,7 +1243,7 @@ function CustomerManagement() {
             </div>
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Date</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Date (Select any date from the month you want to print)</label>
                 <input
                   type="date"
                   value={printDate}
@@ -986,6 +1470,96 @@ function CustomerManagement() {
                   className="px-4 py-2 bg-orange-600 text-white rounded-md shadow-sm hover:bg-orange-700"
                 >
                   Add Pending
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+      
+      {/* Add Customer Modal */}
+      {showAddCustomerModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-[100]">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">Add New Customer</h3>
+              <button
+                onClick={() => {
+                  setShowAddCustomerModal(false);
+                  setNewCustomer({ name: '', phone: '', pendingAmount: '' });
+                  setNewCustomerReason('');
+                  setAddCustomerErrors({});
+                }}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                ✕
+              </button>
+            </div>
+            <form onSubmit={handleAddCustomer}>
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-1">Customer Name</label>
+                <input
+                  type="text"
+                  value={newCustomer.name}
+                  onChange={e => setNewCustomer({ ...newCustomer, name: e.target.value })}
+                  className={`w-full px-4 py-2 border rounded-md shadow-sm ${addCustomerErrors.name ? 'border-red-500' : 'border-gray-300'}`}
+                  required
+                />
+                {addCustomerErrors.name && <p className="text-red-600 text-xs mt-1">{addCustomerErrors.name}</p>}
+              </div>
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-1">Phone Number</label>
+                <input
+                  type="text"
+                  value={newCustomer.phone}
+                  onChange={e => setNewCustomer({ ...newCustomer, phone: e.target.value })}
+                  className={`w-full px-4 py-2 border rounded-md shadow-sm ${addCustomerErrors.phone ? 'border-red-500' : 'border-gray-300'}`}
+                  required
+                />
+                {addCustomerErrors.phone && <p className="text-red-600 text-xs mt-1">{addCustomerErrors.phone}</p>}
+              </div>
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-1">Pending Amount (PKR) - Optional</label>
+                <input
+                  type="number"
+                  value={newCustomer.pendingAmount}
+                  onChange={e => setNewCustomer({ ...newCustomer, pendingAmount: e.target.value })}
+                  className={`w-full px-4 py-2 border rounded-md shadow-sm ${addCustomerErrors.pendingAmount ? 'border-red-500' : 'border-gray-300'}`}
+                  min="0"
+                />
+                {addCustomerErrors.pendingAmount && <p className="text-red-600 text-xs mt-1">{addCustomerErrors.pendingAmount}</p>}
+              </div>
+              {newCustomer.pendingAmount && (
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Reason for Pending Amount</label>
+                  <input
+                    type="text"
+                    value={newCustomerReason}
+                    onChange={e => setNewCustomerReason(e.target.value)}
+                    className={`w-full px-4 py-2 border rounded-md shadow-sm ${addCustomerErrors.reason ? 'border-red-500' : 'border-gray-300'}`}
+                    required
+                  />
+                  {addCustomerErrors.reason && <p className="text-red-600 text-xs mt-1">{addCustomerErrors.reason}</p>}
+                </div>
+              )}
+              <div className="flex justify-end space-x-3 mt-6">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowAddCustomerModal(false);
+                    setNewCustomer({ name: '', phone: '', pendingAmount: '' });
+                    setNewCustomerReason('');
+                    setAddCustomerErrors({});
+                  }}
+                  className="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-gray-700 hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-blue-600 text-white rounded-md shadow-sm hover:bg-blue-700"
+                >
+                  Add Customer
                 </button>
               </div>
             </form>
