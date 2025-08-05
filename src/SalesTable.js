@@ -20,6 +20,7 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
   const [paymentHistory, setPaymentHistory] = useState([]);
   const [showEditModal, setShowEditModal] = useState(false);
   const [editSale, setEditSale] = useState(null);
+  const [showRemainingBalance, setShowRemainingBalance] = useState(true);
 
   const months = [
     'January', 'February', 'March', 'April', 'May', 'June',
@@ -177,7 +178,8 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
         paymentHistory: customerPaymentHistory,
         billNumber: sale.billNumber,
         builteNo: sale.builteNo || '-',
-        previousRemaining
+        previousRemaining,
+        showRemainingBalance
       });
 
       const printWindow = window.open('', '_blank', 'width=800,height=600');

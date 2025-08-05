@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { collection, addDoc, getDocs, query, orderBy, doc, updateDoc, where } from 'firebase/firestore';
+import { collection, addDoc, getDocs, query, orderBy, doc, updateDoc, where, deleteDoc } from 'firebase/firestore';
 import { db } from './firebase';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -7,6 +7,8 @@ import autoTable from 'jspdf-autotable';
 function SupplierManagement() {
   const [suppliers, setSuppliers] = useState([]);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [selectedSupplier, setSelectedSupplier] = useState(null);
   const [supplierProducts, setSupplierProducts] = useState([]);
@@ -16,6 +18,14 @@ function SupplierManagement() {
     address: '',
     balance: 0
   });
+  const [editingSupplier, setEditingSupplier] = useState({
+    id: '',
+    name: '',
+    phone: '',
+    address: '',
+    balance: 0
+  });
+  const [supplierToDelete, setSupplierToDelete] = useState(null);
   const [newProduct, setNewProduct] = useState({
     name: '',
     unitPrice: 0,
@@ -34,6 +44,7 @@ function SupplierManagement() {
   });
   const [errors, setErrors] = useState({});
   const [showSuccess, setShowSuccess] = useState(false);
+  const [successMessage, setSuccessMessage] = useState('');
   const [showNewProductForm, setShowNewProductForm] = useState(false);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [supplierDetails, setSupplierDetails] = useState({
@@ -215,29 +226,32 @@ function SupplierManagement() {
     }
   };
 
-  const validateSupplier = async () => {
+  const validateSupplier = async (supplierData = newSupplier, isEditing = false, excludeId = null) => {
     const newErrors = {};
     
     // Name validation
-    if (!newSupplier.name.trim()) {
+    if (!supplierData.name.trim()) {
       newErrors.name = 'Supplier name is required';
-    } else if (newSupplier.name.length > 50) {
+    } else if (supplierData.name.length > 50) {
       newErrors.name = 'Name cannot exceed 50 characters';
-    } else if (/\d/.test(newSupplier.name)) {
+    } else if (/\d/.test(supplierData.name)) {
       newErrors.name = 'Name cannot contain numbers';
     }
     
     // Phone validation
-    if (!newSupplier.phone.trim()) {
+    if (!supplierData.phone.trim()) {
       newErrors.phone = 'Phone number is required';
-    } else if (!/^\d{11}$/.test(newSupplier.phone)) {
+    } else if (!/^\d{11}$/.test(supplierData.phone)) {
       newErrors.phone = 'Phone number must be exactly 11 digits';
     } else {
-      // Check for duplicate phone number
-      const phoneQuery = query(collection(db, 'suppliers'), where('phone', '==', newSupplier.phone));
+      // Check for duplicate phone number (exclude current supplier when editing)
+      const phoneQuery = query(collection(db, 'suppliers'), where('phone', '==', supplierData.phone));
       const querySnapshot = await getDocs(phoneQuery);
       if (!querySnapshot.empty) {
-        newErrors.phone = 'Phone number already exists';
+        const existingSupplier = querySnapshot.docs.find(doc => doc.id !== excludeId);
+        if (existingSupplier) {
+          newErrors.phone = 'Phone number already exists';
+        }
       }
     }
     
@@ -307,6 +321,7 @@ function SupplierManagement() {
         balance: 0
       });
       setErrors({});
+      setSuccessMessage('Supplier added successfully!');
       setShowSuccess(true);
       setTimeout(() => setShowSuccess(false), 3000);
       fetchSuppliers();
@@ -314,6 +329,85 @@ function SupplierManagement() {
       console.error('Error adding supplier:', error);
       alert('Error adding supplier. Please check console for details.');
     }
+  };
+
+  const handleEditSupplier = async () => {
+    if (!await validateSupplier(editingSupplier, true, editingSupplier.id)) return;
+
+    try {
+      const supplierRef = doc(db, 'suppliers', editingSupplier.id);
+      await updateDoc(supplierRef, {
+        name: editingSupplier.name,
+        phone: editingSupplier.phone,
+        address: editingSupplier.address,
+        updatedAt: new Date().toISOString()
+      });
+      
+      setShowEditModal(false);
+      setEditingSupplier({
+        id: '',
+        name: '',
+        phone: '',
+        address: '',
+        balance: 0
+      });
+      setErrors({});
+      setSuccessMessage('Supplier updated successfully!');
+      setShowSuccess(true);
+      setTimeout(() => setShowSuccess(false), 3000);
+      fetchSuppliers();
+    } catch (error) {
+      console.error('Error updating supplier:', error);
+      alert('Error updating supplier. Please check console for details.');
+    }
+  };
+
+  const handleDeleteSupplier = async () => {
+    if (!supplierToDelete) return;
+
+    try {
+      // Delete supplier products
+      const productsQuery = query(collection(db, 'supplierProducts'), where('supplierId', '==', supplierToDelete.id));
+      const productsSnapshot = await getDocs(productsQuery);
+      const deleteProductPromises = productsSnapshot.docs.map(doc => deleteDoc(doc.ref));
+      await Promise.all(deleteProductPromises);
+
+      // Delete supplier payments
+      const paymentsQuery = query(collection(db, 'supplierPayments'), where('supplierId', '==', supplierToDelete.id));
+      const paymentsSnapshot = await getDocs(paymentsQuery);
+      const deletePaymentPromises = paymentsSnapshot.docs.map(doc => deleteDoc(doc.ref));
+      await Promise.all(deletePaymentPromises);
+
+      // Delete the supplier
+      const supplierRef = doc(db, 'suppliers', supplierToDelete.id);
+      await deleteDoc(supplierRef);
+      
+      setShowDeleteModal(false);
+      setSupplierToDelete(null);
+      setSuccessMessage('Supplier deleted successfully!');
+      setShowSuccess(true);
+      setTimeout(() => setShowSuccess(false), 3000);
+      fetchSuppliers();
+    } catch (error) {
+      console.error('Error deleting supplier:', error);
+      alert('Error deleting supplier. Please check console for details.');
+    }
+  };
+
+  const openEditModal = (supplier) => {
+    setEditingSupplier({
+      id: supplier.id,
+      name: supplier.name,
+      phone: supplier.phone,
+      address: supplier.address,
+      balance: supplier.balance || 0
+    });
+    setShowEditModal(true);
+  };
+
+  const openDeleteModal = (supplier) => {
+    setSupplierToDelete(supplier);
+    setShowDeleteModal(true);
   };
 
   const handleAddProduct = async () => {
@@ -404,6 +498,7 @@ function SupplierManagement() {
         balance: Math.round(selectedSupplier.balance + remainingAmount)
       });
 
+      setSuccessMessage('Product added successfully!');
       setShowSuccess(true);
       setTimeout(() => setShowSuccess(false), 3000);
       fetchSuppliers();
@@ -460,6 +555,9 @@ function SupplierManagement() {
         chequeNumber: ''
       });
       setErrors({});
+      setSuccessMessage('Payment added successfully!');
+      setShowSuccess(true);
+      setTimeout(() => setShowSuccess(false), 3000);
       fetchSuppliers();
       fetchSupplierProducts(selectedSupplier.id);
     } catch (error) {
@@ -548,7 +646,7 @@ function SupplierManagement() {
     <div className="space-y-6">
       {showSuccess && (
         <div className="fixed top-4 right-4 bg-green-500 text-white px-6 py-3 rounded-lg shadow-lg z-50">
-          {selectedSupplier ? 'Product added successfully!' : 'Supplier added successfully!'}
+          {successMessage}
         </div>
       )}
 
@@ -633,6 +731,24 @@ function SupplierManagement() {
                     >
                       <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                      </svg>
+                    </button>
+                    <button
+                      onClick={() => openEditModal(supplierGroup)}
+                      className="text-yellow-600 hover:text-yellow-800 mr-2"
+                      title="Edit Supplier"
+                    >
+                      <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                      </svg>
+                    </button>
+                    <button
+                      onClick={() => openDeleteModal(supplierGroup)}
+                      className="text-red-600 hover:text-red-800 mr-2"
+                      title="Delete Supplier"
+                    >
+                      <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                       </svg>
                     </button>
                     <button
@@ -1179,6 +1295,127 @@ function SupplierManagement() {
                   className="px-4 py-2 bg-blue-600 text-white rounded-md shadow-sm hover:bg-blue-700"
                 >
                   Add Supplier
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Supplier Modal */}
+      {showEditModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
+            <h3 className="text-lg font-semibold mb-4">Edit Supplier</h3>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Name</label>
+                <input
+                  type="text"
+                  value={editingSupplier.name}
+                  onChange={(e) => {
+                    const value = e.target.value.replace(/[0-9]/g, '');
+                    setEditingSupplier({ ...editingSupplier, name: value });
+                    if (errors.name) {
+                      setErrors(prev => ({ ...prev, name: '' }));
+                    }
+                  }}
+                  maxLength={50}
+                  className={`mt-1 block w-full border rounded-md shadow-sm p-2 ${
+                    errors.name ? 'border-red-500' : 'border-gray-300'
+                  }`}
+                />
+                {errors.name && (
+                  <p className="mt-1 text-sm text-red-600">{errors.name}</p>
+                )}
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Phone</label>
+                <input
+                  type="text"
+                  value={editingSupplier.phone}
+                  onChange={(e) => {
+                    const value = e.target.value.replace(/\D/g, '').slice(0, 11);
+                    setEditingSupplier({ ...editingSupplier, phone: value });
+                    if (errors.phone) {
+                      setErrors(prev => ({ ...prev, phone: '' }));
+                    }
+                  }}
+                  className={`mt-1 block w-full border rounded-md shadow-sm p-2 ${
+                    errors.phone ? 'border-red-500' : 'border-gray-300'
+                  }`}
+                  maxLength={11}
+                />
+                {errors.phone && (
+                  <p className="mt-1 text-sm text-red-600">{errors.phone}</p>
+                )}
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Address</label>
+                <textarea
+                  value={editingSupplier.address}
+                  onChange={(e) => setEditingSupplier({ ...editingSupplier, address: e.target.value })}
+                  className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2"
+                  rows={3}
+                />
+              </div>
+              <div className="flex justify-end space-x-3">
+                <button
+                  onClick={() => {
+                    setShowEditModal(false);
+                    setErrors({});
+                  }}
+                  className="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-gray-700 hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleEditSupplier}
+                  className="px-4 py-2 bg-yellow-600 text-white rounded-md shadow-sm hover:bg-yellow-700"
+                >
+                  Update Supplier
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Supplier Modal */}
+      {showDeleteModal && supplierToDelete && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
+            <h3 className="text-lg font-semibold mb-4 text-red-600">Delete Supplier</h3>
+            <div className="space-y-4">
+              <p className="text-gray-700">
+                Are you sure you want to delete <strong>{supplierToDelete.name}</strong>? 
+                This action will also delete all associated products and payments, and cannot be undone.
+              </p>
+              <div className="bg-red-50 border border-red-200 rounded-md p-3">
+                <p className="text-sm text-red-700">
+                  <strong>Warning:</strong> This will permanently delete:
+                </p>
+                <ul className="text-sm text-red-700 mt-1 list-disc list-inside">
+                  <li>The supplier record</li>
+                  <li>All supplier products</li>
+                  <li>All supplier payments</li>
+                </ul>
+              </div>
+              <div className="flex justify-end space-x-3">
+                <button
+                  onClick={() => {
+                    setShowDeleteModal(false);
+                    setSupplierToDelete(null);
+                  }}
+                  className="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-gray-700 hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleDeleteSupplier}
+                  className="px-4 py-2 bg-red-600 text-white rounded-md shadow-sm hover:bg-red-700"
+                >
+                  Delete Supplier
                 </button>
               </div>
             </div>

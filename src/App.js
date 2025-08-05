@@ -4,6 +4,7 @@ import ReceiptForm from './ReceiptForm';
 import InventoryForm from './InventoryForm';
 import SupplierManagement from './SupplierManagement';
 import CustomerManagement from './CustomerManagement';
+import CustomerMonthlyReport from './CustomerMonthlyReport';
 import ProfitLossSummary from './ProfitLossSummary';
 import AuthForm from './AuthForm';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
@@ -12,7 +13,7 @@ import MiscellaneousPayments from './MiscellaneousPayments';
 
 function App() {
   const [user, setUser] = useState(null);
-  const [activeTab, setActiveTab] = useState('sales');
+  const [activeTab, setActiveTab] = useState('profit-loss');
   const [showReceiptForm, setShowReceiptForm] = useState(false);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [showSuccessMessage, setShowSuccessMessage] = useState(false);
@@ -63,6 +64,16 @@ function App() {
             <div className="px-4 py-8 sm:px-0">
               <div className="border-b border-gray-200">
                 <nav className="-mb-px flex space-x-8" aria-label="Tabs">
+                <button
+                    onClick={() => setActiveTab('profit-loss')}
+                    className={`${
+                      activeTab === 'profit-loss'
+                        ? 'border-blue-500 text-blue-600'
+                        : 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700'
+                    } whitespace-nowrap border-b-2 py-4 px-1 text-sm font-medium`}
+                  >
+                    Profit & Loss
+                  </button>
                   <button
                     onClick={() => setActiveTab('sales')}
                     className={`${
@@ -94,6 +105,16 @@ function App() {
                     Customers
                   </button>
                   <button
+                    onClick={() => setActiveTab('customer-monthly')}
+                    className={`${
+                      activeTab === 'customer-monthly'
+                        ? 'border-blue-500 text-blue-600'
+                        : 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700'
+                    } whitespace-nowrap border-b-2 py-4 px-1 text-sm font-medium`}
+                  >
+                    Customer Monthly Report
+                  </button>
+                  <button
                     onClick={() => setActiveTab('suppliers')}
                     className={`${
                       activeTab === 'suppliers'
@@ -103,16 +124,7 @@ function App() {
                   >
                     Suppliers
                   </button>
-                  <button
-                    onClick={() => setActiveTab('profit-loss')}
-                    className={`${
-                      activeTab === 'profit-loss'
-                        ? 'border-blue-500 text-blue-600'
-                        : 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700'
-                    } whitespace-nowrap border-b-2 py-4 px-1 text-sm font-medium`}
-                  >
-                    Profit & Loss
-                  </button>
+                
                   <button
                     onClick={() => setActiveTab('miscellaneous')}
                     className={`${
@@ -152,6 +164,7 @@ function App() {
                 )}
                 {activeTab === 'inventory' && <InventoryForm />}
                 {activeTab === 'customers' && <CustomerManagement />}
+                {activeTab === 'customer-monthly' && <CustomerMonthlyReport />}
                 {activeTab === 'suppliers' && <SupplierManagement />}
                 {activeTab === 'profit-loss' && <ProfitLossSummary />}
                 {activeTab === 'miscellaneous' && <MiscellaneousPayments />}

@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { collection, getDocs, query, orderBy, where, addDoc, doc, updateDoc } from 'firebase/firestore';
+import { collection, getDocs, query, orderBy, where, addDoc, doc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { db } from './firebase';
 import { generatePrintableHTML } from './PrintableReceipt';
 import jsPDF from 'jspdf';
+import { generateUniqueCustomerId } from './utils';
+import { migrateExistingCustomerIds } from './migrateCustomerIds';
 
 function CustomerManagement() {
   const [customers, setCustomers] = useState({});
@@ -16,6 +18,7 @@ function CustomerManagement() {
   const [paymentCustomer, setPaymentCustomer] = useState(null);
   const [paymentAmount, setPaymentAmount] = useState('');
   const [paymentMethod, setPaymentMethod] = useState('Cash');
+  const [onlinePaymentDetails, setOnlinePaymentDetails] = useState('');
   const [paymentDate, setPaymentDate] = useState(() => new Date().toISOString().split('T')[0]);
   const [paymentComment, setPaymentComment] = useState('');
   const [chequeNumber, setChequeNumber] = useState('');
@@ -34,10 +37,65 @@ function CustomerManagement() {
   const [previousDayDebt, setPreviousDayDebt] = useState(0);
   const [printDate, setPrintDate] = useState(() => new Date().toISOString().split('T')[0]);
   const [paymentHistory, setPaymentHistory] = useState([]);
+  const [showEditCustomerModal, setShowEditCustomerModal] = useState(false);
+  const [editingCustomer, setEditingCustomer] = useState(null);
+  const [editCustomerData, setEditCustomerData] = useState({ name: '', phone: '' });
+  const [editCustomerErrors, setEditCustomerErrors] = useState({});
+  const [showDeleteConfirmModal, setShowDeleteConfirmModal] = useState(false);
+  const [deletingCustomer, setDeletingCustomer] = useState(null);
+  const [showSearchByCustomerIdModal, setShowSearchByCustomerIdModal] = useState(false);
+  const [customerIdSearch, setCustomerIdSearch] = useState('');
+  const [searchedCustomer, setSearchedCustomer] = useState(null);
+  const [searchedCustomerBills, setSearchedCustomerBills] = useState([]);
+  const [searchCustomerLoading, setSearchCustomerLoading] = useState(false);
+  const [migrating, setMigrating] = useState(false);
+  const [migrationCompleted, setMigrationCompleted] = useState(false);
+  const [showRemainingBalance, setShowRemainingBalance] = useState(true);
 
   useEffect(() => {
     fetchCustomerData();
   }, []);
+
+  // Check if migration has been completed by looking for customer IDs
+  useEffect(() => {
+    const checkMigrationStatus = () => {
+      // Check if any customers are missing customer IDs or have long IDs that need migration
+      const hasCustomersNeedingMigration = Object.values(customers).some(customer => {
+        // Customers without IDs need migration
+        if (!customer.customerId) return true;
+        // Customers with long IDs (CUST-...) need migration
+        if (customer.customerId && customer.customerId.startsWith('CUST-')) return true;
+        // Customers with long cus- IDs (like cus-1753710032884) need migration
+        if (customer.customerId && customer.customerId.startsWith('cus-') && customer.customerId.length > 10) return true;
+        // Customers with phone numbers as IDs need migration
+        if (customer.customerId && customer.customerId === customer.phone) return true;
+        return false;
+      });
+      
+      console.log('Migration status check:', {
+        totalCustomers: Object.keys(customers).length,
+        customersNeedingMigration: Object.values(customers).filter(customer => {
+          if (!customer.customerId) return true;
+          if (customer.customerId && customer.customerId.startsWith('CUST-')) return true;
+          if (customer.customerId && customer.customerId.startsWith('cus-') && customer.customerId.length > 10) return true;
+          if (customer.customerId && customer.customerId === customer.phone) return true;
+          return false;
+        }).length,
+        hasCustomersNeedingMigration,
+        migrationCompleted: !hasCustomersNeedingMigration && Object.keys(customers).length > 0
+      });
+      
+      if (!hasCustomersNeedingMigration && Object.keys(customers).length > 0) {
+        setMigrationCompleted(true);
+      } else {
+        setMigrationCompleted(false);
+      }
+    };
+    
+    if (!loading && Object.keys(customers).length > 0) {
+      checkMigrationStatus();
+    }
+  }, [customers, loading]);
 
   const fetchCustomerData = async () => {
     try {
@@ -86,6 +144,7 @@ function CustomerManagement() {
           customerData[customerKey] = {
             names: cleanName ? [cleanName] : [],
             phone: sale.customerPhone,
+            customerId: sale.customerId || null, // Add customer ID
             totalAmount: sale.totalAmount || 0,
             paidAmount: sale.paidAmount || 0,
             remainingAmount: sale.remainingAmount || 0,
@@ -171,8 +230,18 @@ function CustomerManagement() {
     const customer = printCustomer;
     const customerName = (customer.names && customer.names[0]) || customer.name || customer.phone || '-';
     let items = [];
+    
+    // Get the selected date and create a date range for the month
+    const selectedDate = new Date(printDate);
+    const year = selectedDate.getFullYear();
+    const month = selectedDate.getMonth();
+    const startOfMonth = new Date(year, month, 1);
+    const endOfMonth = new Date(year, month + 1, 0);
+    
     customer.sales.forEach(sale => {
-      if (isPrintDate(sale.date)) {
+      const saleDate = new Date(sale.date);
+      // Check if sale is in the selected month
+      if (saleDate >= startOfMonth && saleDate <= endOfMonth) {
         if (sale.paymentMethod === 'Manual Debt') {
           items.push({
             name: 'Manual Pending Payment',
@@ -190,6 +259,7 @@ function CustomerManagement() {
         }
       }
     });
+    
     // Add previous day debt if entered and > 0
     if (previousDayDebt && Number(previousDayDebt) > 0) {
       items.push({
@@ -198,17 +268,30 @@ function CustomerManagement() {
         price: Number(previousDayDebt)
       });
     }
+    
     const totalAmount = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+    
     // Calculate paid amount for the selected month
     const paidAmountForSelectedMonth = customer.sales
-      .filter(sale => sale.paidAmount && sale.paidAmount > 0 && sale.paymentMethod !== 'Manual Debt' && isPrintDate(sale.date))
+      .filter(sale => {
+        const saleDate = new Date(sale.date);
+        return sale.paidAmount && sale.paidAmount > 0 && 
+               sale.paymentMethod !== 'Manual Debt' && 
+               saleDate >= startOfMonth && saleDate <= endOfMonth;
+      })
       .reduce((sum, sale) => sum + sale.paidAmount, 0);
+    
     // Calculate remaining amount for the receipt
     const remainingAmount = totalAmount - paidAmountForSelectedMonth;
     
     // Get payment history for the selected month
     const paymentHistory = customer.sales
-      .filter(sale => sale.paidAmount && sale.paidAmount > 0 && sale.paymentMethod !== 'Manual Debt' && isPrintDate(sale.date))
+      .filter(sale => {
+        const saleDate = new Date(sale.date);
+        return sale.paidAmount && sale.paidAmount > 0 && 
+               sale.paymentMethod !== 'Manual Debt' && 
+               saleDate >= startOfMonth && saleDate <= endOfMonth;
+      })
       .map(sale => ({
         date: sale.date,
         amount: sale.paidAmount,
@@ -217,9 +300,21 @@ function CustomerManagement() {
         comment: sale.comment,
         type: sale.paymentMethod || 'Sale'
       }));
+    
+    console.log('handlePrintWithDebt Debug:', {
+      customerName,
+      customerPhone: customer.phone,
+      customerId: customer.customerId || customer.phone,
+      totalAmount,
+      paidAmountForSelectedMonth,
+      remainingAmount,
+      showRemainingBalance
+    });
+    
     const html = generatePrintableHTML({
       customerName,
       customerPhone: customer.phone,
+      customerId: customer.customerId || customer.phone,
       items,
       totalAmount,
       paidAmount: paidAmountForSelectedMonth,
@@ -228,8 +323,13 @@ function CustomerManagement() {
       isCustomerReport: true,
       subtotal: totalAmount,
       paymentMethod: 'Customer Report',
-      paymentHistory
+      paymentHistory,
+      billNumber: '',
+      builteNo: '',
+      previousRemaining: 0,
+      showRemainingBalance
     });
+    
     const printWindow = window.open('', '_blank', 'width=800,height=600');
     printWindow.document.open();
     printWindow.document.write(html);
@@ -287,9 +387,21 @@ function CustomerManagement() {
         comment: sale.comment,
         type: sale.paymentMethod || 'Sale'
       }));
+    
+    console.log('handlePrint Debug:', {
+      customerName,
+      customerPhone: customer.phone,
+      customerId: customer.customerId || customer.phone,
+      totalAmount,
+      paidAmountForSelectedMonth,
+      remainingAmount,
+      showRemainingBalance
+    });
+    
     const html = generatePrintableHTML({
       customerName,
       customerPhone: customer.phone,
+      customerId: customer.customerId || customer.phone,
       items,
       totalAmount,
       paidAmount: paidAmountForSelectedMonth,
@@ -298,7 +410,11 @@ function CustomerManagement() {
       isCustomerReport: true,
       subtotal: totalAmount,
       paymentMethod: 'Customer Report',
-      paymentHistory
+      paymentHistory,
+      billNumber: '',
+      builteNo: '',
+      previousRemaining: 0,
+      showRemainingBalance
     });
     const printWindow = window.open('', '_blank', 'width=800,height=600');
     printWindow.document.open();
@@ -399,6 +515,9 @@ function CustomerManagement() {
     if (paymentMethod === 'Other' && !paymentComment.trim()) {
       newErrors.comment = 'Comment is required for "Other" payment method';
     }
+    if (paymentMethod === 'Online Payment' && !onlinePaymentDetails.trim()) {
+      newErrors.onlinePaymentDetails = 'Online payment details are required';
+    }
     setPaymentErrors(newErrors);
     if (Object.keys(newErrors).length > 0) return;
 
@@ -406,10 +525,12 @@ function CustomerManagement() {
       // Add payment record to paymentHistory
       await addDoc(collection(db, 'paymentHistory'), {
         customerPhone: paymentCustomer.phone,
+        customerId: paymentCustomer.customerId || paymentCustomer.phone,
         amount: amount,
         paymentMethod,
         comment: paymentMethod === 'Other' ? paymentComment : '',
         chequeNumber: paymentMethod === 'Cheque' ? chequeNumber : '',
+        onlinePaymentDetails: paymentMethod === 'Online Payment' ? onlinePaymentDetails : '',
         date: new Date(paymentDate).toISOString(),
         type: 'Customer Payment'
       });
@@ -434,6 +555,7 @@ function CustomerManagement() {
         await addDoc(collection(db, 'receipts'), {
           customerName: paymentCustomer.name,
           customerPhone: paymentCustomer.phone,
+          customerId: paymentCustomer.customerId || paymentCustomer.phone,
           totalAmount: 0,
           paidAmount: 0,
           remainingAmount: -remainingToPay,
@@ -461,9 +583,21 @@ function CustomerManagement() {
   };
 
   const handlePrintSale = (sale, customer) => {
+    console.log('handlePrintSale Debug:', {
+      customerName: (customer.names && customer.names[0]) || customer.name || '-',
+      customerPhone: customer.phone,
+      customerId: customer.customerId || customer.phone,
+      totalAmount: sale.totalAmount,
+      paidAmount: sale.paidAmount || 0,
+      remainingAmount: sale.remainingAmount || 0,
+      date: sale.date,
+      showRemainingBalance
+    });
+    
     const html = generatePrintableHTML({
       customerName: (customer.names && customer.names[0]) || customer.name || '-',
       customerPhone: customer.phone,
+      customerId: customer.customerId || customer.phone,
       items: sale.items || [],
       totalAmount: sale.totalAmount,
       paidAmount: sale.paidAmount || 0,
@@ -476,6 +610,10 @@ function CustomerManagement() {
       discountAmount: sale.discountAmount || 0,
       subtotal: sale.totalAmount + (sale.discountAmount || 0),
       paymentHistory: [],
+      billNumber: sale.billNumber || '',
+      builteNo: sale.builteNo || '',
+      previousRemaining: 0,
+      showRemainingBalance
     });
     const printWindow = window.open('', '_blank', 'width=800,height=600');
     printWindow.document.open();
@@ -564,10 +702,14 @@ function CustomerManagement() {
     if (Object.keys(errors).length > 0) return;
 
     try {
+      // Generate a unique, readable customer ID
+      const customerId = await generateUniqueCustomerId(db);
+      
       // Add new customer as a receipt with the pending amount if provided
       const receiptData = {
         customerName: newCustomer.name.trim(),
         customerPhone: newCustomer.phone.trim(),
+        customerId: customerId, // Use generated unique ID
         totalAmount: Number(newCustomer.pendingAmount) || 0,
         paidAmount: 0,
         remainingAmount: Number(newCustomer.pendingAmount) || 0,
@@ -591,6 +733,71 @@ function CustomerManagement() {
     } catch (error) {
       console.error('Error adding customer:', error);
       alert('Error adding customer: ' + error.message);
+    }
+  };
+
+  const handleEditCustomer = async (e) => {
+    e.preventDefault();
+    const errors = {};
+    
+    if (!editCustomerData.name.trim()) {
+      errors.name = 'Customer name is required';
+    }
+    if (!editCustomerData.phone.trim()) {
+      errors.phone = 'Phone number is required';
+    }
+    
+    setEditCustomerErrors(errors);
+    if (Object.keys(errors).length > 0) return;
+
+    try {
+      // Update all sales records for this customer with the new information
+      const salesToUpdate = editingCustomer.sales;
+      
+      for (const sale of salesToUpdate) {
+        const saleDoc = doc(db, 'receipts', sale.id);
+        await updateDoc(saleDoc, {
+          customerName: editCustomerData.name.trim(),
+          customerPhone: editCustomerData.phone.trim(),
+          customerId: editingCustomer.customerId || editingCustomer.phone // Preserve existing customer ID
+        });
+      }
+      
+      // Reset form and close modal
+      setEditCustomerData({ name: '', phone: '' });
+      setEditCustomerErrors({});
+      setShowEditCustomerModal(false);
+      setEditingCustomer(null);
+      
+      // Refresh customer data
+      fetchCustomerData();
+    } catch (error) {
+      console.error('Error updating customer:', error);
+      alert('Error updating customer: ' + error.message);
+    }
+  };
+
+  const handleDeleteCustomer = async () => {
+    if (!deletingCustomer) return;
+
+    try {
+      // Delete all sales records for this customer
+      const salesToDelete = deletingCustomer.sales;
+      
+      for (const sale of salesToDelete) {
+        const saleDoc = doc(db, 'receipts', sale.id);
+        await deleteDoc(saleDoc);
+      }
+      
+      // Close modal and reset state
+      setShowDeleteConfirmModal(false);
+      setDeletingCustomer(null);
+      
+      // Refresh customer data
+      fetchCustomerData();
+    } catch (error) {
+      console.error('Error deleting customer:', error);
+      alert('Error deleting customer: ' + error.message);
     }
   };
 
@@ -689,6 +896,10 @@ function CustomerManagement() {
             doc.text(`   Cheque Number: ${payment.chequeNumber}`, 20, yPosition);
             yPosition += 6;
           }
+          if (payment.onlinePaymentDetails) {
+            doc.text(`   Online Payment Details: ${payment.onlinePaymentDetails}`, 20, yPosition);
+            yPosition += 6;
+          }
           if (payment.comment) {
             doc.text(`   Comment: ${payment.comment}`, 20, yPosition);
             yPosition += 6;
@@ -783,6 +994,99 @@ function CustomerManagement() {
     }
   };
 
+  const handleSearchByCustomerId = async () => {
+    if (!customerIdSearch.trim()) {
+      alert('Please enter a customer ID');
+      return;
+    }
+
+    setSearchCustomerLoading(true);
+    try {
+      // First search by customer ID in existing data
+      const customerByPhone = customers[customerIdSearch.trim()];
+      const customerById = Object.values(customers).find(c => c.customerId === customerIdSearch.trim());
+      
+      if (customerByPhone || customerById) {
+        const customer = customerByPhone || customerById;
+        setSearchedCustomer(customer);
+        setSearchedCustomerBills(customer.sales);
+      } else {
+        // Search in Firestore by customer ID
+        const receiptsQuery = query(
+          collection(db, 'receipts'), 
+          where('customerId', '==', customerIdSearch.trim()),
+          orderBy('date', 'desc')
+        );
+        const querySnapshot = await getDocs(receiptsQuery);
+        if (!querySnapshot.empty) {
+          const bills = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          const customerFromBills = {
+            names: [...new Set(bills.map(bill => bill.customerName).filter(Boolean))],
+            phone: bills[0].customerPhone,
+            customerId: bills[0].customerId,
+            totalAmount: bills.reduce((sum, bill) => sum + (bill.totalAmount || 0), 0),
+            paidAmount: bills.reduce((sum, bill) => sum + (bill.paidAmount || 0), 0),
+            remainingAmount: bills.reduce((sum, bill) => sum + (bill.remainingAmount || 0), 0),
+            sales: bills
+          };
+          setSearchedCustomer(customerFromBills);
+          setSearchedCustomerBills(bills);
+        } else {
+          // If not found by customer ID, try searching by phone number as fallback
+          const phoneQuery = query(
+            collection(db, 'receipts'), 
+            where('customerPhone', '==', customerIdSearch.trim()),
+            orderBy('date', 'desc')
+          );
+          const phoneSnapshot = await getDocs(phoneQuery);
+          if (!phoneSnapshot.empty) {
+            const bills = phoneSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            const customerFromBills = {
+              names: [...new Set(bills.map(bill => bill.customerName).filter(Boolean))],
+              phone: customerIdSearch.trim(),
+              customerId: bills[0].customerId,
+              totalAmount: bills.reduce((sum, bill) => sum + (bill.totalAmount || 0), 0),
+              paidAmount: bills.reduce((sum, bill) => sum + (bill.paidAmount || 0), 0),
+              remainingAmount: bills.reduce((sum, bill) => sum + (bill.remainingAmount || 0), 0),
+              sales: bills
+            };
+            setSearchedCustomer(customerFromBills);
+            setSearchedCustomerBills(bills);
+          } else {
+            setSearchedCustomer(null);
+            setSearchedCustomerBills([]);
+            alert('No customer found with this ID');
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error searching by customer ID:', error);
+      alert('Error searching for customer: ' + error.message);
+    } finally {
+      setSearchCustomerLoading(false);
+    }
+  };
+
+  const handleMigrateCustomerIds = async () => {
+    if (!window.confirm('This will add unique customer IDs to all existing receipts. This process may take a few minutes. Continue?')) {
+      return;
+    }
+    
+    setMigrating(true);
+    try {
+      await migrateExistingCustomerIds();
+      alert('Customer ID migration completed successfully!');
+      setMigrationCompleted(true);
+      // Refresh the customer data to show the new customer IDs
+      await fetchCustomerData();
+    } catch (error) {
+      console.error('Migration failed:', error);
+      alert('Migration failed: ' + error.message);
+    } finally {
+      setMigrating(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex justify-center items-center h-64">
@@ -802,6 +1106,30 @@ function CustomerManagement() {
           >
             Add Customer
           </button>
+          <button
+            onClick={() => setShowSearchByCustomerIdModal(true)}
+            className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-md shadow-sm transition-all"
+          >
+            Search by Customer ID
+          </button>
+          {/* {!migrationCompleted && (
+            <button
+              onClick={handleMigrateCustomerIds}
+              disabled={migrating}
+              className={`px-4 py-2 rounded-md shadow-sm transition-all ${
+                migrating 
+                  ? 'bg-gray-400 cursor-not-allowed' 
+                  : 'bg-orange-600 hover:bg-orange-700 text-white'
+              }`}
+            >
+              {migrating ? 'Migrating...' : 'Migrate Customer IDs'}
+            </button>
+          )}
+          {migrationCompleted && (
+            <div className="px-4 py-2 bg-green-100 text-green-800 rounded-md text-sm">
+              ✓ Customer IDs migrated
+            </div>
+          )} */}
           <div className="w-64">
             <input
               type="text"
@@ -820,18 +1148,19 @@ function CustomerManagement() {
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
               <tr>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-32">Customer ID</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-48 max-w-48">Names</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-32">Phone</th>
                 <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider w-32">Total (PKR)</th>
                 <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider w-32">Paid (PKR)</th>
                 <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider w-32">Remaining (PKR)</th>
-                <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider w-40">Actions</th>
+                <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider w-48">Actions</th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
               {filteredCustomers.length === 0 ? (
                 <tr>
-                  <td colSpan="6" className="px-6 py-4 text-center text-gray-500">
+                  <td colSpan="7" className="px-6 py-4 text-center text-gray-500">
                     {Object.keys(customers).length === 0 
                       ? 'No customers found. Add your first customer or check if data is loading properly.'
                       : 'No customers match your search criteria.'}
@@ -839,122 +1168,191 @@ function CustomerManagement() {
                 </tr>
               ) : (
                 filteredCustomers.map((customer, index) => {
-                  console.log(`Rendering customer ${index + 1}:`, customer.names?.[0], customer.totalAmount);
                   return (
-                  <tr key={index} className={`hover:bg-gray-50 ${customer.remainingAmount > 0 ? 'bg-red-50' : customer.remainingAmount < 0 ? 'bg-green-50' : ''}`}>
-                    <td className="px-4 py-4 w-48 max-w-48">
-                      <div className="text-sm text-gray-900 font-medium break-words">{customer.names?.join(', ') || 'N/A'}</div>
+                    <tr key={index} className={`hover:bg-gray-50 ${customer.remainingAmount > 0 ? 'bg-red-50' : customer.remainingAmount < 0 ? 'bg-green-50' : ''}`}>
+                                          <td className="px-4 py-4 w-32">
+                      <div className="text-xs text-gray-700 font-mono">{customer.customerId || customer.phone}</div>
                     </td>
-                    <td className="px-4 py-4 whitespace-nowrap w-32">
-                      <div className="text-sm font-medium text-gray-900">{customer.phone || 'N/A'}</div>
-                    </td>
-                    <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900 text-right font-medium w-32">
-                      Rs {customer.totalAmount !== undefined ? Math.round(customer.totalAmount).toLocaleString() : '0'}
-                    </td>
-                    <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900 text-right font-medium w-32">
-                      Rs {customer.paidAmount !== undefined ? Math.round(customer.paidAmount).toLocaleString() : '0'}
-                    </td>
-                    <td className={`px-4 py-4 whitespace-nowrap text-sm text-right font-medium w-32 ${customer.remainingAmount > 0 ? 'text-red-600' : customer.remainingAmount < 0 ? 'text-green-600' : 'text-gray-900'}`}>
-                      {customer.remainingAmount !== undefined && customer.remainingAmount !== 0 ? `Rs ${Math.round(customer.remainingAmount).toLocaleString()}` : '-'}
-                    </td>
-                    <td className="px-4 py-4 whitespace-nowrap text-sm text-center space-x-1 w-40">
-                      {/* Download Button */}
-                      <button
-                        onClick={() => handleDownloadCustomerDetails(customer)}
-                        className="text-blue-600 hover:text-blue-800 p-1 rounded"
-                        title="Download Customer Details as PDF"
-                      >
-                        <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                        </svg>
-                      </button>
-                      
-                      {/* Print Button for Monthly Data */}
-                      <button
-                        onClick={() => {
-                          // Close all other modals first
-                          setShowDetails(false);
-                          setShowSaleDetails(false);
-                          setShowPaymentModal(false);
-                          setShowAddCustomerModal(false);
-                          setShowAddPendingModal(false);
-                          
-                          // Reset states
-                          setSelectedCustomer(null);
-                          setSelectedSale(null);
-                          setPaymentCustomer(null);
-                          setPendingCustomer(null);
-                          
-                          // Open print modal
-                          setPrintCustomer(customer);
-                          setPrintDate(new Date().toISOString().split('T')[0]);
-                          setPreviousDayDebt(0);
-                          setShowPrintModal(true);
-                        }}
-                        className="text-gray-600 hover:text-gray-800 p-1 rounded"
-                        title="Print Monthly Customer Report"
-                      >
-                        <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
-                        </svg>
-                      </button>
-                      
-                      {/* View Details Button */}
-                      <button
-                        onClick={() => handleViewDetails(customer)}
-                        className="text-purple-600 hover:text-purple-800 p-1 rounded"
-                        title="View Details"
-                      >
-                        <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                        </svg>
-                      </button>
-                      
-                      {/* Add Payment Button */}
-                      <button
-                        onClick={() => handleAddPaymentClick(customer)}
-                        className="text-green-600 hover:text-green-800 p-1 rounded"
-                        title="Add Payment (Reduces Remaining Amount)"
-                      >
-                        <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                        </svg>
-                      </button>
-                      
-                      {/* Add Pending Payment Button */}
-                      <button
-                        onClick={() => {
-                          console.log('Opening add pending modal for customer:', customer.phone);
-                          // Close all modals first
-                          setShowDetails(false);
-                          setShowSaleDetails(false);
-                          setShowPaymentModal(false);
-                          setShowAddCustomerModal(false);
-                          setShowPrintModal(false);
-                          
-                          // Reset all modal-related states
-                          setSelectedCustomer(null);
-                          setSelectedSale(null);
-                          setPrintCustomer(null);
-                          setPaymentCustomer(null);
-                          
-                          // Then open add pending modal
-                          setPendingCustomer(customer);
-                          setPendingAmount('');
-                          setPendingReason('');
-                          setPendingError('');
-                          setShowAddPendingModal(true);
-                        }}
-                        className="text-orange-600 hover:text-orange-800 p-1 rounded"
-                        title="Add Pending Payment (Increases Remaining Amount)"
-                      >
-                        <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                        </svg>
-                      </button>
-                    </td>
-                  </tr>
+                      <td className="px-4 py-4 w-48 max-w-48">
+                        <div className="text-sm text-gray-900 font-medium break-words">{customer.names?.join(', ') || 'N/A'}</div>
+                      </td>
+                      <td className="px-4 py-4 whitespace-nowrap w-32">
+                        <div className="text-sm font-medium text-gray-900">{customer.phone || 'N/A'}</div>
+                      </td>
+                      <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900 text-right font-medium w-32">
+                        Rs {customer.totalAmount !== undefined ? Math.round(customer.totalAmount).toLocaleString() : '0'}
+                      </td>
+                      <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900 text-right font-medium w-32">
+                        Rs {customer.paidAmount !== undefined ? Math.round(customer.paidAmount).toLocaleString() : '0'}
+                      </td>
+                      <td className={`px-4 py-4 whitespace-nowrap text-sm text-right font-medium w-32 ${customer.remainingAmount > 0 ? 'text-red-600' : customer.remainingAmount < 0 ? 'text-green-600' : 'text-gray-900'}`}> 
+                        {customer.remainingAmount !== undefined && customer.remainingAmount !== 0 ? `Rs ${Math.round(customer.remainingAmount).toLocaleString()}` : '-'}
+                      </td>
+                      <td className="px-4 py-4 whitespace-nowrap text-sm text-center space-x-1 w-48">
+                        {/* Download Button */}
+                        <button
+                          onClick={() => handleDownloadCustomerDetails(customer)}
+                          className="text-blue-600 hover:text-blue-800 p-1 rounded"
+                          title="Download Customer Details as PDF"
+                        >
+                          <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                          </svg>
+                        </button>
+                        
+                        {/* Print Button for Monthly Data */}
+                        <button
+                          onClick={() => {
+                            // Close all other modals first
+                            setShowDetails(false);
+                            setShowSaleDetails(false);
+                            setShowPaymentModal(false);
+                            setShowAddCustomerModal(false);
+                            setShowAddPendingModal(false);
+                            
+                            // Reset states
+                            setSelectedCustomer(null);
+                            setSelectedSale(null);
+                            setPaymentCustomer(null);
+                            setPendingCustomer(null);
+                            
+                            // Open print modal
+                            setPrintCustomer(customer);
+                            setPrintDate(new Date().toISOString().split('T')[0]);
+                            setPreviousDayDebt(0);
+                            setShowPrintModal(true);
+                          }}
+                          className="text-gray-600 hover:text-gray-800 p-1 rounded"
+                          title="Print Monthly Customer Report"
+                        >
+                          <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
+                          </svg>
+                        </button>
+                        
+                        {/* View Details Button */}
+                        <button
+                          onClick={() => handleViewDetails(customer)}
+                          className="text-purple-600 hover:text-purple-800 p-1 rounded"
+                          title="View Details"
+                        >
+                          <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                          </svg>
+                        </button>
+                        
+                        {/* Add Payment Button */}
+                        <button
+                          onClick={() => handleAddPaymentClick(customer)}
+                          className="text-green-600 hover:text-green-800 p-1 rounded"
+                          title="Add Payment (Reduces Remaining Amount)"
+                        >
+                          <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          </svg>
+                        </button>
+                        
+                        {/* Add Pending Payment Button */}
+                        <button
+                          onClick={() => {
+                            console.log('Opening add pending modal for customer:', customer.phone);
+                            // Close all modals first
+                            setShowDetails(false);
+                            setShowSaleDetails(false);
+                            setShowPaymentModal(false);
+                            setShowAddCustomerModal(false);
+                            setShowPrintModal(false);
+                            
+                            // Reset all modal-related states
+                            setSelectedCustomer(null);
+                            setSelectedSale(null);
+                            setPrintCustomer(null);
+                            setPaymentCustomer(null);
+                            
+                            // Then open add pending modal
+                            setPendingCustomer(customer);
+                            setPendingAmount('');
+                            setPendingReason('');
+                            setPendingError('');
+                            setShowAddPendingModal(true);
+                          }}
+                          className="text-orange-600 hover:text-orange-800 p-1 rounded"
+                          title="Add Pending Payment (Increases Remaining Amount)"
+                        >
+                          <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                          </svg>
+                        </button>
+                        
+                        {/* Edit Customer Button */}
+                        <button
+                          onClick={() => {
+                            // Close all modals first
+                            setShowDetails(false);
+                            setShowSaleDetails(false);
+                            setShowPaymentModal(false);
+                            setShowAddCustomerModal(false);
+                            setShowPrintModal(false);
+                            setShowAddPendingModal(false);
+                            
+                            // Reset all modal-related states
+                            setSelectedCustomer(null);
+                            setSelectedSale(null);
+                            setPrintCustomer(null);
+                            setPaymentCustomer(null);
+                            setPendingCustomer(null);
+                            
+                            // Then open edit modal
+                            setEditingCustomer(customer);
+                            setEditCustomerData({
+                              name: customer.names?.[0] || '',
+                              phone: customer.phone || ''
+                            });
+                            setEditCustomerErrors({});
+                            setShowEditCustomerModal(true);
+                          }}
+                          className="text-blue-600 hover:text-blue-800 p-1 rounded"
+                          title="Edit Customer Information"
+                        >
+                          <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                          </svg>
+                        </button>
+                        
+                        {/* Delete Customer Button */}
+                        <button
+                          onClick={() => {
+                            // Close all modals first
+                            setShowDetails(false);
+                            setShowSaleDetails(false);
+                            setShowPaymentModal(false);
+                            setShowAddCustomerModal(false);
+                            setShowPrintModal(false);
+                            setShowAddPendingModal(false);
+                            setShowEditCustomerModal(false);
+                            
+                            // Reset all modal-related states
+                            setSelectedCustomer(null);
+                            setSelectedSale(null);
+                            setPrintCustomer(null);
+                            setPaymentCustomer(null);
+                            setPendingCustomer(null);
+                            setEditingCustomer(null);
+                            
+                            // Then open delete confirmation modal
+                            setDeletingCustomer(customer);
+                            setShowDeleteConfirmModal(true);
+                          }}
+                          className="text-red-600 hover:text-red-800 p-1 rounded"
+                          title="Delete Customer (This will delete all sales records)"
+                        >
+                          <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                          </svg>
+                        </button>
+                      </td>
+                    </tr>
                   );
                 })
               )}
@@ -1122,6 +1520,7 @@ function CustomerManagement() {
                             <td className="px-3 py-2 text-sm text-gray-900">
                               {payment.paymentMethod}
                               {payment.chequeNumber && ` (Cheque #${payment.chequeNumber})`}
+                              {payment.onlinePaymentDetails && ` (Details: ${payment.onlinePaymentDetails})`}
                             </td>
                             <td className="px-3 py-2 text-sm">
                               <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${
@@ -1215,6 +1614,7 @@ function CustomerManagement() {
                       <div className="text-lg font-semibold text-gray-900">
                         {selectedSale.paymentMethod}
                         {selectedSale.chequeNumber && ` (Cheque #${selectedSale.chequeNumber})`}
+                        {selectedSale.onlinePaymentDetails && ` (Details: ${selectedSale.onlinePaymentDetails})`}
                         {selectedSale.comment && ` - ${selectedSale.comment}`}
                       </div>
                     </div>
@@ -1251,6 +1651,7 @@ function CustomerManagement() {
                   className="w-full px-4 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
                 />
               </div>
+           
             </div>
             <div className="flex justify-end space-x-3 mt-6">
               <button
@@ -1310,6 +1711,7 @@ function CustomerManagement() {
                   <option value="Card">Card</option>
                   <option value="Cheque">Cheque</option>
                   <option value="Other">Other</option>
+                  <option value="Online Payment">Online Payment</option>
                 </select>
               </div>
               {paymentMethod === 'Cheque' && (
@@ -1336,6 +1738,19 @@ function CustomerManagement() {
                     required
                   />
                   {paymentErrors.comment && <p className="text-red-600 text-xs mt-1">{paymentErrors.comment}</p>}
+                </div>
+              )}
+              {paymentMethod === 'Online Payment' && (
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Online Payment Details</label>
+                  <input
+                    type="text"
+                    value={onlinePaymentDetails}
+                    onChange={e => setOnlinePaymentDetails(e.target.value)}
+                    className={`w-full px-4 py-2 border rounded-md shadow-sm ${paymentErrors.onlinePaymentDetails ? 'border-red-500' : 'border-gray-300'}`}
+                    required
+                  />
+                  {paymentErrors.onlinePaymentDetails && <p className="text-red-600 text-xs mt-1">{paymentErrors.onlinePaymentDetails}</p>}
                 </div>
               )}
               <div className="mb-4">
@@ -1401,6 +1816,7 @@ function CustomerManagement() {
               addDoc(collection(db, 'receipts'), {
                 customerName: pendingCustomer.names?.[0] || '',
                 customerPhone: pendingCustomer.phone,
+                customerId: pendingCustomer.customerId || pendingCustomer.phone, // Use existing customer ID or phone
                 totalAmount: Number(pendingAmount),
                 paidAmount: 0,
                 remainingAmount: Number(pendingAmount),
@@ -1563,6 +1979,290 @@ function CustomerManagement() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Customer Modal */}
+      {showEditCustomerModal && editingCustomer && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-[100]">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">Edit Customer Information</h3>
+              <button
+                onClick={() => {
+                  setShowEditCustomerModal(false);
+                  setEditingCustomer(null);
+                  setEditCustomerData({ name: '', phone: '' });
+                  setEditCustomerErrors({});
+                }}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                ✕
+              </button>
+            </div>
+            <form onSubmit={handleEditCustomer}>
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-1">Customer Name</label>
+                <input
+                  type="text"
+                  value={editCustomerData.name}
+                  onChange={e => setEditCustomerData({ ...editCustomerData, name: e.target.value })}
+                  className={`w-full px-4 py-2 border rounded-md shadow-sm ${editCustomerErrors.name ? 'border-red-500' : 'border-gray-300'}`}
+                  required
+                />
+                {editCustomerErrors.name && <p className="text-red-600 text-xs mt-1">{editCustomerErrors.name}</p>}
+              </div>
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-1">Phone Number</label>
+                <input
+                  type="text"
+                  value={editCustomerData.phone}
+                  onChange={e => setEditCustomerData({ ...editCustomerData, phone: e.target.value })}
+                  className={`w-full px-4 py-2 border rounded-md shadow-sm ${editCustomerErrors.phone ? 'border-red-500' : 'border-gray-300'}`}
+                  required
+                />
+                {editCustomerErrors.phone && <p className="text-red-600 text-xs mt-1">{editCustomerErrors.phone}</p>}
+              </div>
+              <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-md">
+                <p className="text-sm text-yellow-800">
+                  <strong>Note:</strong> This will update all sales records for this customer. The change will affect all historical data.
+                </p>
+              </div>
+              <div className="flex justify-end space-x-3 mt-6">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowEditCustomerModal(false);
+                    setEditingCustomer(null);
+                    setEditCustomerData({ name: '', phone: '' });
+                    setEditCustomerErrors({});
+                  }}
+                  className="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-gray-700 hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-blue-600 text-white rounded-md shadow-sm hover:bg-blue-700"
+                >
+                  Update Customer
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {showDeleteConfirmModal && deletingCustomer && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-[100]">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">Delete Customer</h3>
+              <button
+                onClick={() => {
+                  setShowDeleteConfirmModal(false);
+                  setDeletingCustomer(null);
+                }}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="mb-6">
+              <div className="p-4 bg-red-50 border border-red-200 rounded-md mb-4">
+                <p className="text-sm text-red-800">
+                  <strong>Warning:</strong> This action cannot be undone. All sales records for this customer will be permanently deleted.
+                </p>
+              </div>
+              <div className="space-y-2">
+                <p className="text-sm text-gray-700">
+                  <strong>Customer:</strong> {deletingCustomer.names?.join(', ') || 'N/A'}
+                </p>
+                <p className="text-sm text-gray-700">
+                  <strong>Phone:</strong> {deletingCustomer.phone}
+                </p>
+                <p className="text-sm text-gray-700">
+                  <strong>Total Sales:</strong> {deletingCustomer.sales?.length || 0} records
+                </p>
+                <p className="text-sm text-gray-700">
+                  <strong>Total Amount:</strong> Rs {Math.round(deletingCustomer.totalAmount || 0).toLocaleString()}
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end space-x-3">
+              <button
+                onClick={() => {
+                  setShowDeleteConfirmModal(false);
+                  setDeletingCustomer(null);
+                }}
+                className="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-gray-700 hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDeleteCustomer}
+                className="px-4 py-2 bg-red-600 text-white rounded-md shadow-sm hover:bg-red-700"
+              >
+                Delete Customer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Search by Customer ID Modal */}
+      {showSearchByCustomerIdModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-[100]">
+          <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-4 p-6 border-b">
+              <h3 className="text-lg font-semibold text-gray-900">Search by Customer ID</h3>
+              <button
+                onClick={() => {
+                  setShowSearchByCustomerIdModal(false);
+                  setCustomerIdSearch('');
+                  setSearchedCustomer(null);
+                  setSearchedCustomerBills([]);
+                }}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                ✕
+              </button>
+            </div>
+            
+            <div className="p-6">
+              <div className="mb-6">
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    placeholder="Enter Customer ID"
+                    value={customerIdSearch}
+                    onChange={(e) => setCustomerIdSearch(e.target.value)}
+                    className="flex-1 px-4 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                    onKeyPress={(e) => e.key === 'Enter' && handleSearchByCustomerId()}
+                  />
+                  <button
+                    onClick={handleSearchByCustomerId}
+                    disabled={searchCustomerLoading}
+                    className="px-6 py-2 bg-blue-600 text-white rounded-md shadow-sm hover:bg-blue-700 disabled:opacity-50"
+                  >
+                    {searchCustomerLoading ? 'Searching...' : 'Search'}
+                  </button>
+                </div>
+              </div>
+
+              {searchedCustomer && (
+                <div className="space-y-6">
+                  {/* Customer Information */}
+                  <div className="bg-gray-50 p-4 rounded-lg">
+                    <h4 className="text-lg font-semibold text-gray-900 mb-3">Customer Information</h4>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                      <div>
+                        <p className="text-sm text-gray-600">Customer ID</p>
+                        <p className="font-medium">{searchedCustomer.customerId || searchedCustomer.phone}</p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-gray-600">Name</p>
+                        <p className="font-medium">{searchedCustomer.names?.join(', ') || 'N/A'}</p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-gray-600">Total Amount</p>
+                        <p className="font-medium">Rs {Math.round(searchedCustomer.totalAmount || 0).toLocaleString()}</p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-gray-600">Remaining Amount</p>
+                        <p className={`font-medium ${searchedCustomer.remainingAmount > 0 ? 'text-red-600' : 'text-gray-900'}`}>
+                          Rs {Math.round(searchedCustomer.remainingAmount || 0).toLocaleString()}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Bills/Receipts */}
+                  <div>
+                    <h4 className="text-lg font-semibold text-gray-900 mb-3">Bills/Receipts ({searchedCustomerBills.length})</h4>
+                    <div className="overflow-x-auto">
+                      <table className="min-w-full divide-y divide-gray-200">
+                        <thead className="bg-gray-50">
+                          <tr>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Bill No</th>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
+                            <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Total Amount</th>
+                            <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Paid Amount</th>
+                            <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Remaining</th>
+                            <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody className="bg-white divide-y divide-gray-200">
+                          {searchedCustomerBills.map((bill, index) => (
+                            <tr key={bill.id || index} className="hover:bg-gray-50">
+                              <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
+                                {bill.billNumber || '-'}
+                              </td>
+                              <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
+                                {new Date(bill.date).toLocaleDateString()}
+                              </td>
+                              <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900 text-right">
+                                Rs {Math.round(bill.totalAmount || 0).toLocaleString()}
+                              </td>
+                              <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900 text-right">
+                                Rs {Math.round(bill.paidAmount || 0).toLocaleString()}
+                              </td>
+                              <td className={`px-4 py-4 whitespace-nowrap text-sm text-right ${bill.remainingAmount > 0 ? 'text-red-600' : 'text-gray-900'}`}>
+                                Rs {Math.round(bill.remainingAmount || 0).toLocaleString()}
+                              </td>
+                              <td className="px-4 py-4 whitespace-nowrap text-sm text-center">
+                                <button
+                                  onClick={() => {
+                                    const html = generatePrintableHTML({
+                                      customerName: bill.customerName,
+                                      customerPhone: bill.customerPhone,
+                                      customerId: bill.customerId,
+                                      items: bill.items || [],
+                                      totalAmount: bill.totalAmount,
+                                      paidAmount: bill.paidAmount,
+                                      remainingAmount: bill.remainingAmount,
+                                      date: bill.date,
+                                      paymentMethod: bill.paymentMethod,
+                                      chequeNumber: bill.chequeNumber,
+                                      comment: bill.comment,
+                                      discount: bill.discount || 0,
+                                      discountAmount: bill.discountAmount || 0,
+                                      subtotal: bill.subtotal || bill.totalAmount,
+                                      billNumber: bill.billNumber,
+                                      builteNo: bill.builteNo,
+                                      previousRemaining: 0,
+                                      paymentHistory: [],
+                                      showRemainingBalance
+                                    });
+                                    const printWindow = window.open('', '_blank', 'width=800,height=600');
+                                    printWindow.document.open();
+                                    printWindow.document.write(html);
+                                    printWindow.document.close();
+                                    printWindow.onload = function () {
+                                      printWindow.focus();
+                                      printWindow.print();
+                                      printWindow.close();
+                                    };
+                                  }}
+                                  className="text-blue-600 hover:text-blue-800 p-1 rounded"
+                                  title="Print Bill"
+                                >
+                                  <svg className="w-5 h-5 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
+                                  </svg>
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}

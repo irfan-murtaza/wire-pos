@@ -3,6 +3,7 @@ import { collection, addDoc, query, orderBy, getDocs, where } from 'firebase/fir
 import { db } from './firebase';
 import { generatePrintableHTML } from './PrintableReceipt';
 import { useRef } from 'react';
+import { getOrCreateCustomerId } from './utils';
 
 function ReceiptForm({ isOpen, onClose, onSave }) {
   const hasPrintedRef = useRef(false);
@@ -20,6 +21,7 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
   const [isPartialPayment, setIsPartialPayment] = useState(false);
   const [paymentHistory, setPaymentHistory] = useState([]);
   const [builteNo, setBuilteNo] = useState('');
+  const [showRemainingBalance, setShowRemainingBalance] = useState(true);
 
   const calculateTotal = () => {
     const subtotal = items.reduce((sum, item) => sum + (item.quantity * item.price), 0);
@@ -47,7 +49,7 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
     }
   }, [showPrint]);
 
-  const handlePrint = () => {
+  const handlePrint = async () => {
     const initialPayment = isPartialPayment ? paidAmount : total;
     
     // Create initial payment record for printing
@@ -60,9 +62,12 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
       type: 'Initial Payment'
     };
 
+    const customerId = await getOrCreateCustomerId(db, customerPhone);
+
     const html = generatePrintableHTML({
       customerName,
       customerPhone,
+      customerId,
       items: items.map(item => ({
         name: item.name,
         quantity: item.quantity,
@@ -79,7 +84,11 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
       paidAmount: initialPayment,
       remainingAmount: isPartialPayment ? (total - paidAmount) : 0,
       isCustomerReport: false,
-      paymentHistory: [initialPaymentRecord]
+      paymentHistory: [initialPaymentRecord],
+      billNumber: '',
+      builteNo: '',
+      previousRemaining: 0,
+      showRemainingBalance
     });
   
     const printWindow = window.open('', '_blank', 'width=800,height=600');
@@ -181,6 +190,10 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
 
     try {
       const initialPayment = isPartialPayment ? paidAmount : total;
+      
+      // Generate or get existing customer ID
+      const customerId = await getOrCreateCustomerId(db, customerPhone);
+      
       // Fetch the current max bill number for this customer
       const receiptsQuery = query(collection(db, 'receipts'), where('customerPhone', '==', customerPhone), orderBy('billNumber', 'desc'));
       const receiptsSnapshot = await getDocs(receiptsQuery);
@@ -190,10 +203,12 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
         maxBillNumber = firstDoc.data().billNumber || 0;
       }
       const newBillNumber = maxBillNumber + 1;
+      
       // Create the receipt data
       const receiptData = {
         customerName,
         customerPhone,
+        customerId, // Add the unique customer ID
         items: items.map(item => ({
           name: item.name,
           quantity: item.quantity,

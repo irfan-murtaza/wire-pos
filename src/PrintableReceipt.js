@@ -1,6 +1,7 @@
 export function generatePrintableHTML({
   customerName,
   customerPhone,
+  customerId,
   items,
   totalAmount,
   date,
@@ -16,31 +17,58 @@ export function generatePrintableHTML({
   paymentHistory = [],
   billNumber,
   builteNo,
-  previousRemaining = 0
+  previousRemaining = 0,
+  showRemainingBalance = true,
 }) {
+  // Debug logging for date and builteNo
+  console.log("PrintableReceipt Input Debug:", {
+    date,
+    builteNo,
+    billNumber,
+    customerName,
+    customerPhone,
+    customerId,
+    showRemainingBalance,
+    remainingAmount,
+    paidAmount,
+    subtotal,
+  });
   const formatDate = (dateString) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
+    try {
+      const date = new Date(dateString);
+      if (isNaN(date.getTime())) {
+        return "Invalid Date";
+      }
+      return date.toLocaleDateString("en-US", {
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    } catch (error) {
+      console.error("Error formatting date:", dateString, error);
+      return "Invalid Date";
+    }
   };
 
   // Ensure payment history includes initial payment if it exists
   let allPayments = [...paymentHistory];
-  if (paidAmount > 0 && !allPayments.some(p => p.type === 'Initial Payment')) {
+  if (
+    paidAmount > 0 &&
+    !allPayments.some((p) => p.type === "Initial Payment")
+  ) {
     // Get the initial payment amount from the sale record
-    const initialPaymentAmount = paidAmount - allPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
+    const initialPaymentAmount =
+      paidAmount - allPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
     if (initialPaymentAmount > 0) {
       allPayments.unshift({
         amount: initialPaymentAmount,
         method: paymentMethod,
         date: date,
-        chequeNumber: chequeNumber || '',
-        comment: comment || '',
-        type: 'Initial Payment'
+        chequeNumber: chequeNumber || "",
+        comment: comment || "",
+        type: "Initial Payment",
       });
     }
   }
@@ -49,7 +77,7 @@ export function generatePrintableHTML({
   allPayments = allPayments.sort((a, b) => new Date(b.date) - new Date(a.date));
 
   const generatePaymentHistoryTable = (paymentHistory) => {
-    if (!paymentHistory || paymentHistory.length === 0) return '';
+    if (!paymentHistory || paymentHistory.length === 0) return "";
 
     return `
       <div class="payment-history">
@@ -66,16 +94,24 @@ export function generatePrintableHTML({
             </tr>
           </thead>
           <tbody>
-            ${paymentHistory.map(payment => `
+            ${paymentHistory
+              .map(
+                (payment) => `
               <tr>
                 <td>${formatDate(payment.date)}</td>
                 <td>${Math.round(payment.amount)}</td>
-                <td>${payment.paymentMethod || payment.method || 'Cash'}</td>
-                <td>${payment.billNumber || '-'}</td>
-                <td>${payment.chequeNumber ? `Cheque #${payment.chequeNumber}` : payment.comment || '-'}</td>
+                <td>${payment.paymentMethod || payment.method || "Cash"}</td>
+                <td>${payment.billNumber || "-"}</td>
+                <td>${
+                  payment.chequeNumber
+                    ? `Cheque #${payment.chequeNumber}`
+                    : payment.comment || "-"
+                }</td>
                 <td>${payment.type}</td>
               </tr>
-            `).join('')}
+            `
+              )
+              .join("")}
           </tbody>
         </table>
       </div>
@@ -83,7 +119,18 @@ export function generatePrintableHTML({
   };
 
   const totalWithPrevious = subtotal + previousRemaining;
-  const totalRemainingFinal = totalWithPrevious - paidAmount;
+  const totalRemainingFinal = remainingAmount || totalWithPrevious - paidAmount;
+
+  // Debug logging
+  console.log("PrintableReceipt Debug:", {
+    subtotal,
+    previousRemaining,
+    totalWithPrevious,
+    paidAmount,
+    remainingAmount,
+    totalRemainingFinal,
+    showRemainingBalance,
+  });
   return `
     <!DOCTYPE html>
     <html>
@@ -332,17 +379,30 @@ export function generatePrintableHTML({
           <div class="receipt-date">
             ${formatDate(date)}
           </div>
-          ${billNumber ? `<div class="bill-number">Bill No: ${billNumber}</div>` : ''}
-          <div class="builte-no">Builte No: ${builteNo || '-'}</div>
-          <div class="customer-info">
-            <div><strong>Name:</strong> ${customerName}</div>
-            <div><strong>Phone:</strong> ${customerPhone || '-'}</div>
-          </div>
-          ${(paymentMethod === 'Manual Debt' && remainingAmount > 0) ? `
-            <div style="margin-bottom: 16px; padding: 12px; background: #fff3cd; border: 1px solid #ffeeba; border-radius: 4px; color: #856404; font-size:1.08em;">
-              <strong>Pending Payment:</strong> This is a pending payment${comment ? `.<br/><strong>Reason:</strong> ${comment}` : '.'}
+          ${
+            billNumber
+              ? `<div class="bill-number">Bill No: ${billNumber}</div>`
+              : ""
+          }
+          <div class="builte-no">Builte No: ${builteNo || "-"}</div>
+                      <div class="customer-info">
+              <div><strong>Name:</strong> ${customerName}</div>
+              <div><strong>Phone:</strong> ${customerPhone || "-"}</div>
+              <div><strong>Customer ID:</strong> ${
+                customerId || customerPhone || "-"
+              }</div>
             </div>
-          ` : ''}
+          ${
+            paymentMethod === "Manual Debt" && remainingAmount > 0
+              ? `
+            <div style="margin-bottom: 16px; padding: 12px; background: #fff3cd; border: 1px solid #ffeeba; border-radius: 4px; color: #856404; font-size:1.08em;">
+              <strong>Pending Payment:</strong> This is a pending payment${
+                comment ? `.<br/><strong>Reason:</strong> ${comment}` : "."
+              }
+            </div>
+          `
+              : ""
+          }
           <table class="receipt-table">
             <thead>
               <tr>
@@ -354,29 +414,57 @@ export function generatePrintableHTML({
               </tr>
             </thead>
             <tbody>
-              ${items.map(item => {
-                const price = item.salesPrice || item.price || 0;
-                const quantity = item.quantity || 0;
-                const total = price * quantity;
-                return `
+              ${items
+                .map((item) => {
+                  const price = item.salesPrice || item.price || 0;
+                  const quantity = item.quantity || 0;
+                  const total = price * quantity;
+                  const isPlaceholder =
+                    item.name === "No transactions for this month";
+                  return `
                   <tr>
-                    <td>${item.name || '-'}</td>
+                    <td>${item.name || "-"}</td>
                     <td>${quantity}</td>
-                    <td>${item.description || '-'}</td>
-                    <td>${Math.round(price)}</td>
-                    <td>${Math.round(total)}</td>
+                    <td>${item.description || "-"}</td>
+                    <td>${isPlaceholder ? "-" : Math.round(price)}</td>
+                    <td>${isPlaceholder ? "-" : Math.round(total)}</td>
                   </tr>
                 `;
-              }).join('')}
+                })
+                .join("")}
             </tbody>
           </table>
           <div class="total-section">
-            <div class="total-row"><span class="total-label">Subtotal:</span><span class="total-value">${Math.round(subtotal)} PKR</span></div>
-            ${discount > 0 ? `<div class="total-row"><span class="total-label">Discount (${discount}%):</span><span class="total-value">-${Math.round(discountAmount)} PKR</span></div>` : ''}
-            <div class="total-row"><span class="total-label">Previous Remaining Amount:</span><span class="total-value">${Math.round(previousRemaining)} PKR</span></div>
-            <div class="total-row"><span class="total-label">Total Amount:</span><span class="total-value">${Math.round(totalWithPrevious)} PKR</span></div>
-            <div class="total-row"><span class="total-label">Paid Amount:</span><span class="total-value">${Math.round(paidAmount)} PKR</span></div>
-            <div class="total-row"><span class="total-label">Total Remaining Amount:</span><span class="total-value">${Math.round(totalRemainingFinal)} PKR</span></div>
+            <div class="total-row"><span class="total-label">Subtotal:</span><span class="total-value">${Math.round(
+              subtotal
+            )} PKR</span></div>
+            ${
+              discount > 0
+                ? `<div class="total-row"><span class="total-label">Discount (${discount}%):</span><span class="total-value">-${Math.round(
+                    discountAmount
+                  )} PKR</span></div>`
+                : ""
+            }
+            ${
+              previousRemaining > 0
+                ? `<div class="total-row"><span class="total-label">Previous Remaining Amount:</span><span class="total-value">${Math.round(
+                    previousRemaining
+                  )} PKR</span></div>`
+                : ""
+            }
+            <div class="total-row"><span class="total-label">Total Amount:</span><span class="total-value">${Math.round(
+              totalWithPrevious
+            )} PKR</span></div>
+            <div class="total-row"><span class="total-label">Paid Amount:</span><span class="total-value">${Math.round(
+              paidAmount
+            )} PKR</span></div>
+            ${
+              showRemainingBalance
+                ? `<div class="total-row"><span class="total-label">Total Remaining Amount:</span><span class="total-value">${Math.round(
+                    totalRemainingFinal
+                  )} PKR</span></div>`
+                : ""
+            }
           </div>
           ${generatePaymentHistoryTable(allPayments)}
           <div class="footer">
