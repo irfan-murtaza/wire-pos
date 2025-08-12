@@ -157,15 +157,27 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
       
       allReceiptsSnapshot.docs.forEach(doc => {
         const data = doc.data();
+        console.log('Processing receipt:', {
+          billNumber: data.billNumber,
+          currentSaleBillNumber: sale.billNumber,
+          isCurrentSale: data.billNumber === sale.billNumber,
+          remainingAmount: data.remainingAmount,
+          previousRemainingBefore: previousRemaining,
+          totalRemainingFromAllMonthsBefore: totalRemainingFromAllMonths
+        });
+        
         if (data.billNumber !== sale.billNumber) {
+          // Only add remaining amounts from OTHER bills (not current one)
           previousRemaining += Number(data.remainingAmount || 0);
+          console.log('Added to previousRemaining:', data.remainingAmount, 'New total:', previousRemaining);
         }
-        // Calculate total remaining from all months
+        // Calculate total remaining from all months (including current sale)
         totalRemainingFromAllMonths += Number(data.remainingAmount || 0);
+        console.log('Added to totalRemainingFromAllMonths:', data.remainingAmount, 'New total:', totalRemainingFromAllMonths);
       });
       
-      // Add current sale's remaining amount to total
-      totalRemainingFromAllMonths += Number(sale.remainingAmount || 0);
+      // Don't add current sale's remaining amount again - it's already included in the loop above
+      // totalRemainingFromAllMonths += Number(sale.remainingAmount || 0);
       
       // Use total remaining from all months if checkbox is checked, otherwise use current sale's remaining
       const remainingAmountToShow = showRemainingBalance ? totalRemainingFromAllMonths : (sale.remainingAmount || 0);
@@ -174,10 +186,18 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
         customerName: sale.customerName,
         customerPhone: sale.customerPhone,
         currentSaleRemaining: sale.remainingAmount || 0,
+        previousRemaining,
         totalRemainingFromAllMonths,
         remainingAmountToShow,
         showRemainingBalance,
-        checkboxState: showRemainingBalance
+        checkboxState: showRemainingBalance,
+        databaseValues: {
+          saleTotalAmount: sale.totalAmount,
+          saleRemainingAmount: sale.remainingAmount,
+          salePaidAmount: sale.paidAmount,
+          saleDiscount: sale.discount,
+          saleDiscountAmount: sale.discountAmount
+        }
       });
       
       const html = generatePrintableHTML({
@@ -194,7 +214,7 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
         comment: sale.comment,
         discount: sale.discount || 0,
         discountAmount: sale.discountAmount || 0,
-        subtotal: sale.totalAmount + (sale.discountAmount || 0),
+        subtotal: sale.items.reduce((sum, item) => sum + (item.quantity * (item.salesPrice || item.price || 0)), 0), // Calculate from items
         paymentHistory: customerPaymentHistory,
         billNumber: sale.billNumber,
         builteNo: sale.builteNo || '-',

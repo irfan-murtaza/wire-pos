@@ -1,9 +1,8 @@
-import React, { useState, useEffect } from 'react';
-import { collection, addDoc, query, orderBy, getDocs, where } from 'firebase/firestore';
+import { addDoc, collection, getDocs, query, where } from 'firebase/firestore';
+import React, { useEffect, useRef, useState } from 'react';
 import { db } from './firebase';
 import { generatePrintableHTML } from './PrintableReceipt';
-import { useRef } from 'react';
-import { getOrCreateCustomerId } from './utils';
+// import { getOrCreateCustomerId } from './utils';
 
 function ReceiptForm({ isOpen, onClose, onSave }) {
   const hasPrintedRef = useRef(false);
@@ -12,7 +11,7 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
   const [comment, setComment] = useState('');
   const [chequeNumber, setChequeNumber] = useState('');
   const [customerName, setCustomerName] = useState('');
-  const [customerPhone, setCustomerPhone] = useState('');
+  const [customerId, setCustomerId] = useState('');
   const [items, setItems] = useState([{ name: '', quantity: 1, price: 0 }]);
   const [errors, setErrors] = useState({});
   const [discount, setDiscount] = useState(0);
@@ -62,11 +61,9 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
       type: 'Initial Payment'
     };
 
-    const customerId = await getOrCreateCustomerId(db, customerPhone);
-
     const html = generatePrintableHTML({
       customerName,
-      customerPhone,
+      customerPhone: customerId, // Keep for backward compatibility
       customerId,
       items: items.map(item => ({
         name: item.name,
@@ -145,10 +142,10 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
       newErrors.customerName = 'Customer name can only contain letters, spaces, hyphens, and apostrophes';
     }
 
-    if (!customerPhone) {
-      newErrors.customerPhone = 'Phone number is required';
-    } else if (!/^\d{11}$/.test(customerPhone)) {
-      newErrors.customerPhone = 'Phone number must be exactly 11 digits';
+    if (!customerId) {
+      newErrors.customerId = 'Customer ID is required';
+    } else if (!/^\d+$/.test(customerId)) {
+      newErrors.customerId = 'Customer ID must contain only numbers';
     }
     
     items.forEach((item, index) => {
@@ -191,23 +188,28 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
     try {
       const initialPayment = isPartialPayment ? paidAmount : total;
       
-      // Generate or get existing customer ID
-      const customerId = await getOrCreateCustomerId(db, customerPhone);
-      
-      // Fetch the current max bill number for this customer
-      const receiptsQuery = query(collection(db, 'receipts'), where('customerPhone', '==', customerPhone), orderBy('billNumber', 'desc'));
+      // Get all receipts for this customer and find the max bill number
+      // This avoids the composite index requirement
+      const receiptsQuery = query(collection(db, 'receipts'), where('customerId', '==', customerId));
       const receiptsSnapshot = await getDocs(receiptsQuery);
       let maxBillNumber = 0;
+      
       if (!receiptsSnapshot.empty) {
-        const firstDoc = receiptsSnapshot.docs[0];
-        maxBillNumber = firstDoc.data().billNumber || 0;
+        // Find the maximum bill number from all receipts for this customer
+        receiptsSnapshot.docs.forEach(doc => {
+          const data = doc.data();
+          if (data.billNumber && data.billNumber > maxBillNumber) {
+            maxBillNumber = data.billNumber;
+          }
+        });
       }
+      
       const newBillNumber = maxBillNumber + 1;
       
       // Create the receipt data
       const receiptData = {
         customerName,
-        customerPhone,
+        customerPhone: customerId, // Keep for backward compatibility
         customerId, // Add the unique customer ID
         items: items.map(item => ({
           name: item.name,
@@ -221,7 +223,7 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
         date: new Date().toISOString(),
         paymentMethod: paymentMethod,
         chequeNumber: paymentMethod === 'Cheque' ? chequeNumber : '',
-        comment: paymentMethod === 'Other' ? comment : '',
+        comment: paymentMethod === 'Other' || paymentMethod === 'Online' ? comment : '',
         discount: showDiscount ? discount : 0,
         discountAmount: showDiscount ? discountAmount : 0,
         subtotal,
@@ -241,7 +243,7 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
           paymentMethod: paymentMethod,
           date: new Date().toISOString(),
           chequeNumber: paymentMethod === 'Cheque' ? chequeNumber : '',
-          comment: paymentMethod === 'Other' ? comment : '',
+          comment: paymentMethod === 'Other' || paymentMethod === 'Online' ? comment : '',
           type: 'Initial Payment'
         };
         
@@ -262,7 +264,7 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
     setComment('');
     setChequeNumber('');
     setCustomerName('');
-    setCustomerPhone('');
+    setCustomerId('');
     setItems([{ name: '', quantity: 1, price: 0 }]);
     setErrors({});
     setDiscount(0);
@@ -320,22 +322,21 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Customer Phone</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Customer ID</label>
               <input
-                type="tel"
-                placeholder="Enter 11-digit phone number"
-                value={customerPhone}
+                type="text"
+                placeholder="Enter customer ID"
+                value={customerId}
                 onChange={(e) => {
-                  const value = e.target.value.replace(/\D/g, '').slice(0, 11);
-                  setCustomerPhone(value);
+                  const value = e.target.value.replace(/\D/g, '');
+                  setCustomerId(value);
                 }}
                 className={`w-full px-4 py-2 border rounded-md shadow-sm ${
-                  errors.customerPhone ? 'border-red-500' : 'border-gray-300'
+                  errors.customerId ? 'border-red-500' : 'border-gray-300'
                 }`}
-                maxLength={11}
               />
-              {errors.customerPhone && (
-                <p className="mt-1 text-sm text-red-600">{errors.customerPhone}</p>
+              {errors.customerId && (
+                <p className="mt-1 text-sm text-red-600">{errors.customerId}</p>
               )}
             </div>
 
@@ -558,6 +559,7 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
               <option>Cash</option>
               <option>Card</option>
               <option>Cheque</option>
+              <option>Online</option>
               <option>Other</option>
             </select>
           </div>
@@ -576,6 +578,24 @@ function ReceiptForm({ isOpen, onClose, onSave }) {
               />
               {errors.chequeNumber && (
                 <p className="mt-1 text-sm text-red-600">{errors.chequeNumber}</p>
+              )}
+            </div>
+          )}
+
+          {paymentMethod === 'Online' && (
+            <div className="mt-4">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Online Payment Details</label>
+              <input
+                type="text"
+                value={comment}
+                onChange={(e) => setComment(e.target.value)}
+                placeholder="Enter online payment details (transaction ID, etc.)"
+                className={`w-full px-4 py-2 border rounded-md shadow-sm ${
+                  errors.comment ? 'border-red-500' : 'border-gray-300'
+                }`}
+              />
+              {errors.comment && (
+                <p className="mt-1 text-sm text-red-600">{errors.comment}</p>
               )}
             </div>
           )}

@@ -119,11 +119,25 @@ export function generatePrintableHTML({
   };
 
   const totalWithPrevious = subtotal + previousRemaining;
-  const totalRemainingFinal = remainingAmount || totalWithPrevious - paidAmount;
+  // Fix: If remainingAmount is provided, use it directly. Otherwise calculate from scratch
+  const totalRemainingFinal = remainingAmount !== undefined ? remainingAmount : (totalWithPrevious - paidAmount);
 
   // Calculate total based on showRemainingBalance checkbox
   const finalTotal = showRemainingBalance ? totalWithPrevious : subtotal;
   const finalRemaining = showRemainingBalance ? totalRemainingFinal : 0;
+
+  // Validation: Check if the math makes sense
+  const expectedRemaining = finalTotal - paidAmount;
+  if (Math.abs(finalRemaining - expectedRemaining) > 1) { // Allow for small rounding differences
+    console.warn('PrintableReceipt Math Validation Failed:', {
+      finalTotal,
+      paidAmount,
+      expectedRemaining: finalTotal - paidAmount,
+      actualRemaining: finalRemaining,
+      difference: finalRemaining - expectedRemaining,
+      inputs: { subtotal, previousRemaining, remainingAmount, showRemainingBalance }
+    });
+  }
 
   // Debug logging
   console.log("PrintableReceipt Debug:", {
@@ -136,7 +150,21 @@ export function generatePrintableHTML({
     showRemainingBalance,
     finalTotal,
     finalRemaining,
-    willShowRemaining: showRemainingBalance ? 'YES' : 'NO'
+    willShowRemaining: showRemainingBalance ? 'YES' : 'NO',
+    calculation: {
+      step1: `subtotal (${subtotal}) + previousRemaining (${previousRemaining}) = totalWithPrevious (${totalWithPrevious})`,
+      step2: `remainingAmount provided: ${remainingAmount !== undefined ? remainingAmount : 'undefined'}`,
+      step3: `totalRemainingFinal: ${remainingAmount !== undefined ? remainingAmount : (totalWithPrevious - paidAmount)}`,
+      step4: `finalTotal: ${showRemainingBalance ? totalWithPrevious : subtotal}`,
+      step5: `finalRemaining: ${showRemainingBalance ? totalRemainingFinal : 0}`
+    },
+    rawInputs: {
+      subtotal: subtotal,
+      previousRemaining: previousRemaining,
+      paidAmount: paidAmount,
+      remainingAmount: remainingAmount,
+      showRemainingBalance: showRemainingBalance
+    }
   });
   return `
     <!DOCTYPE html>
@@ -392,7 +420,14 @@ export function generatePrintableHTML({
               : ""
           }
           <div class="builte-no">Builte No: ${builteNo || "-"}</div>
-                      <div class="customer-info">
+          ${
+            showRemainingBalance && finalRemaining > 0
+              ? `<div style="text-align: center; font-size: 1.13em; color: #dc3545; margin: 12px 0 18px 0; font-weight: 700; padding: 8px; background: #fff5f5; border: 1px solid #fecaca; border-radius: 8px;">
+                  Total Remaining Amount: ${Math.round(finalRemaining)} PKR
+                </div>`
+              : ""
+          }
+          <div class="customer-info">
               <div><strong>Name:</strong> ${customerName}</div>
               <div><strong>Phone:</strong> ${customerPhone || "-"}</div>
               <div><strong>Customer ID:</strong> ${customerId || "-"}</div>
@@ -463,13 +498,6 @@ export function generatePrintableHTML({
             <div class="total-row"><span class="total-label">Paid Amount:</span><span class="total-value">${Math.round(
               paidAmount
             )} PKR</span></div>
-            ${
-              showRemainingBalance
-                ? `<div class="total-row"><span class="total-label">Total Remaining Amount:</span><span class="total-value">${Math.round(
-                    finalRemaining
-                  )} PKR</span></div>`
-                : ""
-            }
           </div>
           ${generatePaymentHistoryTable(allPayments)}
           <div class="footer">

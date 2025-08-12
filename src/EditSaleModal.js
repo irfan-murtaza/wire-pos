@@ -27,7 +27,7 @@ function EditSaleModal({ sale, onSave, onClose }) {
   const validate = () => {
     const errs = {};
     if (!form.customerName.trim()) errs.customerName = 'Name required';
-    if (!/^\d{11}$/.test(form.customerPhone)) errs.customerPhone = 'Phone must be 11 digits';
+    if (!form.customerId || !/^\d+$/.test(form.customerId)) errs.customerId = 'Customer ID must contain only numbers';
     form.items.forEach((item, idx) => {
       if (!item.name) errs[`itemName${idx}`] = 'Product name required';
       if (!item.quantity || item.quantity <= 0) errs[`itemQuantity${idx}`] = 'Quantity > 0';
@@ -69,9 +69,9 @@ function EditSaleModal({ sale, onSave, onClose }) {
               {errors.customerName && <p className="text-sm text-red-600">{errors.customerName}</p>}
             </div>
             <div className="flex-1">
-              <label className="block text-sm font-medium text-gray-700 mb-1">Phone</label>
-              <input type="text" value={form.customerPhone} onChange={e => handleChange('customerPhone', e.target.value.replace(/\D/g, '').slice(0, 11))} className={`w-full px-3 py-2 border rounded-md shadow-sm ${errors.customerPhone ? 'border-red-500' : 'border-gray-300'}`} maxLength={11} />
-              {errors.customerPhone && <p className="text-sm text-red-600">{errors.customerPhone}</p>}
+              <label className="block text-sm font-medium text-gray-700 mb-1">Customer ID</label>
+              <input type="text" value={form.customerId} onChange={e => handleChange('customerId', e.target.value.replace(/\D/g, ''))} className={`w-full px-3 py-2 border rounded-md shadow-sm ${errors.customerId ? 'border-red-500' : 'border-gray-300'}`} />
+              {errors.customerId && <p className="text-sm text-red-600">{errors.customerId}</p>}
             </div>
             <div className="flex-1">
               <label className="block text-sm font-medium text-gray-700 mb-1">Builte No</label>
@@ -109,6 +109,7 @@ function EditSaleModal({ sale, onSave, onClose }) {
                 <option>Cash</option>
                 <option>Card</option>
                 <option>Cheque</option>
+                <option>Online</option>
                 <option>Other</option>
               </select>
             </div>
@@ -116,6 +117,12 @@ function EditSaleModal({ sale, onSave, onClose }) {
               <div className="flex-1">
                 <label className="block text-sm font-medium text-gray-700 mb-1">Cheque Number</label>
                 <input type="text" value={form.chequeNumber} onChange={e => handleChange('chequeNumber', e.target.value)} className="w-full px-3 py-2 border rounded-md shadow-sm" />
+              </div>
+            )}
+            {form.paymentMethod === 'Online' && (
+              <div className="flex-1">
+                <label className="block text-sm font-medium text-gray-700 mb-1">Online Payment Details</label>
+                <input type="text" value={form.comment} onChange={e => handleChange('comment', e.target.value)} placeholder="Enter online payment details" className="w-full px-3 py-2 border rounded-md shadow-sm" />
               </div>
             )}
             {form.paymentMethod === 'Other' && (
