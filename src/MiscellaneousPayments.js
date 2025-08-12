@@ -1,6 +1,15 @@
-import React, { useState, useEffect } from 'react';
-import { collection, addDoc, getDocs, query, orderBy, Timestamp, doc, updateDoc } from 'firebase/firestore';
-import { db } from './firebase';
+import React, { useState, useEffect } from "react";
+import {
+  collection,
+  addDoc,
+  getDocs,
+  query,
+  orderBy,
+  Timestamp,
+  doc,
+  updateDoc,
+} from "firebase/firestore";
+import { db } from "./firebase";
 
 function MiscellaneousPayments() {
   const [payments, setPayments] = useState([]);
@@ -8,10 +17,10 @@ function MiscellaneousPayments() {
   const [showEditModal, setShowEditModal] = useState(false);
   const [editPayment, setEditPayment] = useState(null);
   const [newPayment, setNewPayment] = useState({
-    amount: '',
-    date: new Date().toISOString().split('T')[0],
-    type: '',
-    details: ''
+    amount: "",
+    date: new Date().toISOString().split("T")[0],
+    type: "",
+    details: "",
   });
   const [errors, setErrors] = useState({});
   const [selectedMonth, setSelectedMonth] = useState(
@@ -24,44 +33,44 @@ function MiscellaneousPayments() {
 
   const fetchPayments = async () => {
     try {
-      const [year, month] = selectedMonth.split('-').map(Number);
+      const [year, month] = selectedMonth.split("-").map(Number);
       const startDate = new Date(year, month - 1, 1);
       const endDate = new Date(year, month, 0, 23, 59, 59);
 
       const paymentsQuery = query(
-        collection(db, 'miscellaneousPayments'),
-        orderBy('date', 'desc')
+        collection(db, "miscellaneousPayments"),
+        orderBy("date", "desc")
       );
       const querySnapshot = await getDocs(paymentsQuery);
       const paymentsList = querySnapshot.docs
-        .map(doc => ({
+        .map((doc) => ({
           id: doc.id,
-          ...doc.data()
+          ...doc.data(),
         }))
-        .filter(payment => {
+        .filter((payment) => {
           const paymentDate = new Date(payment.date);
           return paymentDate >= startDate && paymentDate <= endDate;
         });
       setPayments(paymentsList);
     } catch (error) {
-      console.error('Error fetching payments:', error);
-      alert('Error fetching payments. Please check console for details.');
+      console.error("Error fetching payments:", error);
+      alert("Error fetching payments. Please check console for details.");
     }
   };
 
   const validatePayment = () => {
     const newErrors = {};
     if (!newPayment.amount || parseFloat(newPayment.amount) <= 0) {
-      newErrors.amount = 'Amount must be greater than 0';
+      newErrors.amount = "Amount must be greater than 0";
     }
     if (!newPayment.date) {
-      newErrors.date = 'Date is required';
+      newErrors.date = "Date is required";
     }
     if (!newPayment.type.trim()) {
-      newErrors.type = 'Payment type is required';
+      newErrors.type = "Payment type is required";
     }
     if (!newPayment.details.trim()) {
-      newErrors.details = 'Payment details are required';
+      newErrors.details = "Payment details are required";
     }
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -71,39 +80,39 @@ function MiscellaneousPayments() {
     if (!validatePayment()) return;
 
     try {
-      await addDoc(collection(db, 'miscellaneousPayments'), {
+      await addDoc(collection(db, "miscellaneousPayments"), {
         ...newPayment,
         amount: parseFloat(newPayment.amount),
-        createdAt: new Date().toISOString()
+        createdAt: new Date().toISOString(),
       });
-      
+
       setShowAddModal(false);
       setNewPayment({
-        amount: '',
-        date: new Date().toISOString().split('T')[0],
-        type: '',
-        details: ''
+        amount: "",
+        date: new Date().toISOString().split("T")[0],
+        type: "",
+        details: "",
       });
       fetchPayments();
     } catch (error) {
-      console.error('Error adding payment:', error);
-      alert('Error adding payment. Please check console for details.');
+      console.error("Error adding payment:", error);
+      alert("Error adding payment. Please check console for details.");
     }
   };
 
-  const formatCurrency = amount =>
-    new Intl.NumberFormat('en-PK', {
-      style: 'currency',
-      currency: 'PKR',
+  const formatCurrency = (amount) =>
+    new Intl.NumberFormat("en-PK", {
+      style: "currency",
+      currency: "PKR",
       minimumFractionDigits: 0,
-      maximumFractionDigits: 0
+      maximumFractionDigits: 0,
     }).format(amount);
 
   const formatDate = (dateString) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric'
+    return new Date(dateString).toLocaleDateString("en-US", {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
     });
   };
 
@@ -118,32 +127,32 @@ function MiscellaneousPayments() {
     // Validate
     const newErrors = {};
     if (!editPayment.amount || parseFloat(editPayment.amount) <= 0) {
-      newErrors.amount = 'Amount must be greater than 0';
+      newErrors.amount = "Amount must be greater than 0";
     }
     if (!editPayment.date) {
-      newErrors.date = 'Date is required';
+      newErrors.date = "Date is required";
     }
     if (!editPayment.type.trim()) {
-      newErrors.type = 'Payment type is required';
+      newErrors.type = "Payment type is required";
     }
     if (!editPayment.details.trim()) {
-      newErrors.details = 'Payment details are required';
+      newErrors.details = "Payment details are required";
     }
     setErrors(newErrors);
     if (Object.keys(newErrors).length > 0) return;
     try {
-      const paymentRef = doc(db, 'miscellaneousPayments', editPayment.id);
+      const paymentRef = doc(db, "miscellaneousPayments", editPayment.id);
       await updateDoc(paymentRef, {
         amount: parseFloat(editPayment.amount),
         date: editPayment.date,
         type: editPayment.type,
-        details: editPayment.details
+        details: editPayment.details,
       });
       setShowEditModal(false);
       setEditPayment(null);
       fetchPayments();
     } catch (error) {
-      alert('Error updating payment: ' + error.message);
+      alert("Error updating payment: " + error.message);
     }
   };
 
@@ -156,7 +165,7 @@ function MiscellaneousPayments() {
             type="month"
             className="block w-48 rounded-md border-gray-300 shadow-sm"
             value={selectedMonth}
-            onChange={e => setSelectedMonth(e.target.value)}
+            onChange={(e) => setSelectedMonth(e.target.value)}
           />
           <button
             onClick={() => setShowAddModal(true)}
@@ -169,22 +178,38 @@ function MiscellaneousPayments() {
 
       {/* Display Total Amount */}
       <div className="text-xl font-semibold text-gray-800 mt-4">
-        Total for {selectedMonth}: {formatCurrency(payments.reduce((sum, payment) => sum + (parseFloat(payment.amount) || 0), 0))}
+        Total for {selectedMonth}:{" "}
+        {formatCurrency(
+          payments.reduce(
+            (sum, payment) => sum + (parseFloat(payment.amount) || 0),
+            0
+          )
+        )}
       </div>
 
       <div className="overflow-hidden shadow ring-1 ring-black ring-opacity-5 sm:rounded-lg">
         <table className="min-w-full divide-y divide-gray-300">
           <thead className="bg-gray-50">
             <tr>
-              <th className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">Date</th>
-              <th className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">Type</th>
-              <th className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">Details</th>
-              <th className="px-3 py-3.5 text-right text-sm font-semibold text-gray-900">Amount</th>
-              <th className="px-3 py-3.5 text-right text-sm font-semibold text-gray-900">Actions</th>
+              <th className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">
+                Date
+              </th>
+              <th className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">
+                Type
+              </th>
+              <th className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">
+                Details
+              </th>
+              <th className="px-3 py-3.5 text-right text-sm font-semibold text-gray-900">
+                Amount
+              </th>
+              <th className="px-3 py-3.5 text-right text-sm font-semibold text-gray-900">
+                Actions
+              </th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-200 bg-white">
-            {payments.map(payment => (
+            {payments.map((payment) => (
               <tr key={payment.id}>
                 <td className="px-3 py-4 text-sm text-gray-900">
                   {formatDate(payment.date)}
@@ -210,7 +235,10 @@ function MiscellaneousPayments() {
             ))}
             {payments.length === 0 && (
               <tr>
-                <td colSpan="4" className="px-3 py-4 text-sm text-center text-gray-500">
+                <td
+                  colSpan="4"
+                  className="px-3 py-4 text-sm text-center text-gray-500"
+                >
                   No payments found for this month
                 </td>
               </tr>
@@ -222,15 +250,21 @@ function MiscellaneousPayments() {
       {showAddModal && (
         <div className="fixed inset-0 bg-gray-500 bg-opacity-75 flex items-center justify-center">
           <div className="bg-white rounded-lg p-6 max-w-md w-full">
-            <h3 className="text-lg font-medium mb-4">Add Miscellaneous Payment</h3>
-            
+            <h3 className="text-lg font-medium mb-4">
+              Add Miscellaneous Payment
+            </h3>
+
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700">Amount</label>
+                <label className="block text-sm font-medium text-gray-700">
+                  Amount
+                </label>
                 <input
                   type="number"
                   value={newPayment.amount}
-                  onChange={e => setNewPayment({ ...newPayment, amount: e.target.value })}
+                  onChange={(e) =>
+                    setNewPayment({ ...newPayment, amount: e.target.value })
+                  }
                   className="mt-1 block w-full rounded-md border-gray-300 shadow-sm"
                 />
                 {errors.amount && (
@@ -239,11 +273,15 @@ function MiscellaneousPayments() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700">Date</label>
+                <label className="block text-sm font-medium text-gray-700">
+                  Date
+                </label>
                 <input
                   type="date"
                   value={newPayment.date}
-                  onChange={e => setNewPayment({ ...newPayment, date: e.target.value })}
+                  onChange={(e) =>
+                    setNewPayment({ ...newPayment, date: e.target.value })
+                  }
                   className="mt-1 block w-full rounded-md border-gray-300 shadow-sm"
                 />
                 {errors.date && (
@@ -252,11 +290,15 @@ function MiscellaneousPayments() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700">Payment Type</label>
+                <label className="block text-sm font-medium text-gray-700">
+                  Payment Type
+                </label>
                 <input
                   type="text"
                   value={newPayment.type}
-                  onChange={e => setNewPayment({ ...newPayment, type: e.target.value })}
+                  onChange={(e) =>
+                    setNewPayment({ ...newPayment, type: e.target.value })
+                  }
                   className="mt-1 block w-full rounded-md border-gray-300 shadow-sm"
                   placeholder="e.g., Rent, Utilities, Maintenance"
                 />
@@ -266,10 +308,14 @@ function MiscellaneousPayments() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700">Details</label>
+                <label className="block text-sm font-medium text-gray-700">
+                  Details
+                </label>
                 <textarea
                   value={newPayment.details}
-                  onChange={e => setNewPayment({ ...newPayment, details: e.target.value })}
+                  onChange={(e) =>
+                    setNewPayment({ ...newPayment, details: e.target.value })
+                  }
                   className="mt-1 block w-full rounded-md border-gray-300 shadow-sm"
                   rows="3"
                 />
@@ -300,14 +346,20 @@ function MiscellaneousPayments() {
       {showEditModal && editPayment && (
         <div className="fixed inset-0 bg-gray-500 bg-opacity-75 flex items-center justify-center">
           <div className="bg-white rounded-lg p-6 max-w-md w-full">
-            <h3 className="text-lg font-medium mb-4">Edit Miscellaneous Payment</h3>
+            <h3 className="text-lg font-medium mb-4">
+              Edit Miscellaneous Payment
+            </h3>
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700">Amount</label>
+                <label className="block text-sm font-medium text-gray-700">
+                  Amount
+                </label>
                 <input
                   type="number"
                   value={editPayment.amount}
-                  onChange={e => setEditPayment({ ...editPayment, amount: e.target.value })}
+                  onChange={(e) =>
+                    setEditPayment({ ...editPayment, amount: e.target.value })
+                  }
                   className="mt-1 block w-full rounded-md border-gray-300 shadow-sm"
                 />
                 {errors.amount && (
@@ -315,11 +367,15 @@ function MiscellaneousPayments() {
                 )}
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700">Date</label>
+                <label className="block text-sm font-medium text-gray-700">
+                  Date
+                </label>
                 <input
                   type="date"
                   value={editPayment.date}
-                  onChange={e => setEditPayment({ ...editPayment, date: e.target.value })}
+                  onChange={(e) =>
+                    setEditPayment({ ...editPayment, date: e.target.value })
+                  }
                   className="mt-1 block w-full rounded-md border-gray-300 shadow-sm"
                 />
                 {errors.date && (
@@ -327,11 +383,15 @@ function MiscellaneousPayments() {
                 )}
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700">Payment Type</label>
+                <label className="block text-sm font-medium text-gray-700">
+                  Payment Type
+                </label>
                 <input
                   type="text"
                   value={editPayment.type}
-                  onChange={e => setEditPayment({ ...editPayment, type: e.target.value })}
+                  onChange={(e) =>
+                    setEditPayment({ ...editPayment, type: e.target.value })
+                  }
                   className="mt-1 block w-full rounded-md border-gray-300 shadow-sm"
                   placeholder="e.g., Rent, Utilities, Maintenance"
                 />
@@ -340,10 +400,14 @@ function MiscellaneousPayments() {
                 )}
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700">Details</label>
+                <label className="block text-sm font-medium text-gray-700">
+                  Details
+                </label>
                 <textarea
                   value={editPayment.details}
-                  onChange={e => setEditPayment({ ...editPayment, details: e.target.value })}
+                  onChange={(e) =>
+                    setEditPayment({ ...editPayment, details: e.target.value })
+                  }
                   className="mt-1 block w-full rounded-md border-gray-300 shadow-sm"
                   rows="3"
                 />
@@ -373,4 +437,4 @@ function MiscellaneousPayments() {
   );
 }
 
-export default MiscellaneousPayments; 
+export default MiscellaneousPayments;
