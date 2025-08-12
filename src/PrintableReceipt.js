@@ -121,6 +121,10 @@ export function generatePrintableHTML({
   const totalWithPrevious = subtotal + previousRemaining;
   const totalRemainingFinal = remainingAmount || totalWithPrevious - paidAmount;
 
+  // Calculate total based on showRemainingBalance checkbox
+  const finalTotal = showRemainingBalance ? totalWithPrevious : subtotal;
+  const finalRemaining = showRemainingBalance ? totalRemainingFinal : 0;
+
   // Debug logging
   console.log("PrintableReceipt Debug:", {
     subtotal,
@@ -130,6 +134,9 @@ export function generatePrintableHTML({
     remainingAmount,
     totalRemainingFinal,
     showRemainingBalance,
+    finalTotal,
+    finalRemaining,
+    willShowRemaining: showRemainingBalance ? 'YES' : 'NO'
   });
   return `
     <!DOCTYPE html>
@@ -388,9 +395,7 @@ export function generatePrintableHTML({
                       <div class="customer-info">
               <div><strong>Name:</strong> ${customerName}</div>
               <div><strong>Phone:</strong> ${customerPhone || "-"}</div>
-              <div><strong>Customer ID:</strong> ${
-                customerId || customerPhone || "-"
-              }</div>
+              <div><strong>Customer ID:</strong> ${customerId || "-"}</div>
             </div>
           ${
             paymentMethod === "Manual Debt" && remainingAmount > 0
@@ -446,14 +451,14 @@ export function generatePrintableHTML({
                 : ""
             }
             ${
-              previousRemaining > 0
+              previousRemaining > 0 && showRemainingBalance
                 ? `<div class="total-row"><span class="total-label">Previous Remaining Amount:</span><span class="total-value">${Math.round(
                     previousRemaining
                   )} PKR</span></div>`
                 : ""
             }
             <div class="total-row"><span class="total-label">Total Amount:</span><span class="total-value">${Math.round(
-              totalWithPrevious
+              finalTotal
             )} PKR</span></div>
             <div class="total-row"><span class="total-label">Paid Amount:</span><span class="total-value">${Math.round(
               paidAmount
@@ -461,7 +466,7 @@ export function generatePrintableHTML({
             ${
               showRemainingBalance
                 ? `<div class="total-row"><span class="total-label">Total Remaining Amount:</span><span class="total-value">${Math.round(
-                    totalRemainingFinal
+                    finalRemaining
                   )} PKR</span></div>`
                 : ""
             }
@@ -469,6 +474,195 @@ export function generatePrintableHTML({
           ${generatePaymentHistoryTable(allPayments)}
           <div class="footer">
             Thank you for your business!
+          </div>
+        </div>
+      </body>
+    </html>
+  `;
+}
+
+export function generateAllCustomersReportHTML({
+  customers,
+  monthName,
+  showRemainingBalance,
+  selectedYear,
+  selectedMonth
+}) {
+  const totalRemaining = customers.reduce((sum, customer) => sum + customer.remainingAmount, 0);
+  const totalAmount = customers.reduce((sum, customer) => sum + customer.totalAmount, 0);
+  const totalPaid = customers.reduce((sum, customer) => sum + customer.paidAmount, 0);
+
+  return `
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>All Customers Remaining Amounts Report</title>
+        <style>
+          body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+          }
+          .report-container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+          }
+          .header {
+            text-align: center;
+            border-bottom: 2px solid #333;
+            padding-bottom: 20px;
+            margin-bottom: 30px;
+          }
+          .header h1 {
+            color: #333;
+            margin: 0;
+            font-size: 24px;
+          }
+          .header p {
+            color: #666;
+            margin: 5px 0 0 0;
+            font-size: 14px;
+          }
+          .summary-section {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 6px;
+            margin-bottom: 30px;
+          }
+          .summary-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+          }
+          .summary-item {
+            text-align: center;
+            padding: 15px;
+            background: white;
+            border-radius: 6px;
+            border: 1px solid #e9ecef;
+          }
+          .summary-label {
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 5px;
+          }
+          .summary-value {
+            font-size: 18px;
+            font-weight: bold;
+            color: #333;
+          }
+          .customers-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+          }
+          .customers-table th,
+          .customers-table td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+          }
+          .customers-table th {
+            background-color: #f8f9fa;
+            font-weight: bold;
+            color: #333;
+          }
+          .customers-table tr:hover {
+            background-color: #f5f5f5;
+          }
+          .remaining-amount {
+            font-weight: bold;
+            color: #dc3545;
+          }
+          .zero-amount {
+            color: #6c757d;
+            font-style: italic;
+          }
+          .footer {
+            margin-top: 30px;
+            text-align: center;
+            color: #666;
+            font-size: 12px;
+            border-top: 1px solid #ddd;
+            padding-top: 20px;
+          }
+          @media print {
+            body { margin: 0; }
+            .report-container { box-shadow: none; }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="report-container">
+          <div class="header">
+            <h1>All Customers Remaining Amounts Report</h1>
+            <p>${monthName}</p>
+            <p>Generated on: ${new Date().toLocaleDateString()}</p>
+          </div>
+          
+          <div class="summary-section">
+            <h3>Summary</h3>
+            <div class="summary-grid">
+              <div class="summary-item">
+                <div class="summary-label">Total Customers</div>
+                <div class="summary-value">${customers.length}</div>
+              </div>
+              <div class="summary-item">
+                <div class="summary-label">Total Amount</div>
+                <div class="summary-value">${Math.round(totalAmount).toLocaleString()} PKR</div>
+              </div>
+              <div class="summary-item">
+                <div class="summary-label">Total Paid</div>
+                <div class="summary-value">${Math.round(totalPaid).toLocaleString()} PKR</div>
+              </div>
+              ${showRemainingBalance ? `
+                <div class="summary-item">
+                  <div class="summary-label">Total Remaining</div>
+                  <div class="summary-value">${Math.round(totalRemaining).toLocaleString()} PKR</div>
+                </div>
+              ` : ''}
+            </div>
+          </div>
+          
+          <table class="customers-table">
+            <thead>
+              <tr>
+                <th>Customer ID</th>
+                <th>Customer Name</th>
+                <th>Total Amount (PKR)</th>
+                <th>Paid Amount (PKR)</th>
+                ${showRemainingBalance ? '<th>Remaining Amount (PKR)</th>' : ''}
+                <th>Sales Count</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${customers.map(customer => `
+                <tr>
+                  <td>${customer.customerId || '-'}</td>
+                  <td>${customer.name}</td>
+                  <td>${Math.round(customer.totalAmount).toLocaleString()}</td>
+                  <td>${Math.round(customer.paidAmount).toLocaleString()}</td>
+                  ${showRemainingBalance ? `
+                    <td class="${customer.remainingAmount > 0 ? 'remaining-amount' : 'zero-amount'}">
+                      ${customer.remainingAmount > 0 ? Math.round(customer.remainingAmount).toLocaleString() : '0 (No transactions)'}
+                    </td>
+                  ` : ''}
+                  <td>${customer.salesCount}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+          
+          <div class="footer">
+            <p>Report generated on ${new Date().toLocaleString()}</p>
+            <p>${showRemainingBalance ? 'Showing all customers with remaining amounts displayed' : 'Showing only customers with remaining amounts'}</p>
           </div>
         </div>
       </body>

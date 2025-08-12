@@ -3,8 +3,7 @@ import { collection, getDocs, query, orderBy, where, addDoc, doc, updateDoc, del
 import { db } from './firebase';
 import { generatePrintableHTML } from './PrintableReceipt';
 import jsPDF from 'jspdf';
-import { generateUniqueCustomerId } from './utils';
-import { migrateExistingCustomerIds } from './migrateCustomerIds';
+import { generateUniqueCustomerId, checkCustomerIdExists } from './utils';
 
 function CustomerManagement() {
   const [customers, setCustomers] = useState({});
@@ -24,7 +23,7 @@ function CustomerManagement() {
   const [chequeNumber, setChequeNumber] = useState('');
   const [paymentErrors, setPaymentErrors] = useState({});
   const [showAddCustomerModal, setShowAddCustomerModal] = useState(false);
-  const [newCustomer, setNewCustomer] = useState({ name: '', phone: '', pendingAmount: '' });
+  const [newCustomer, setNewCustomer] = useState({ name: '', phone: '', pendingAmount: '', customerId: '' });
   const [addCustomerErrors, setAddCustomerErrors] = useState({});
   const [showAddPendingModal, setShowAddPendingModal] = useState(false);
   const [pendingCustomer, setPendingCustomer] = useState(null);
@@ -39,7 +38,7 @@ function CustomerManagement() {
   const [paymentHistory, setPaymentHistory] = useState([]);
   const [showEditCustomerModal, setShowEditCustomerModal] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState(null);
-  const [editCustomerData, setEditCustomerData] = useState({ name: '', phone: '' });
+  const [editCustomerData, setEditCustomerData] = useState({ name: '', phone: '', customerId: '' });
   const [editCustomerErrors, setEditCustomerErrors] = useState({});
   const [showDeleteConfirmModal, setShowDeleteConfirmModal] = useState(false);
   const [deletingCustomer, setDeletingCustomer] = useState(null);
@@ -48,54 +47,20 @@ function CustomerManagement() {
   const [searchedCustomer, setSearchedCustomer] = useState(null);
   const [searchedCustomerBills, setSearchedCustomerBills] = useState([]);
   const [searchCustomerLoading, setSearchCustomerLoading] = useState(false);
-  const [migrating, setMigrating] = useState(false);
-  const [migrationCompleted, setMigrationCompleted] = useState(false);
   const [showRemainingBalance, setShowRemainingBalance] = useState(true);
+  
+  // Sorting functionality
+  const [sortField, setSortField] = useState('customerId');
+  const [sortDirection, setSortDirection] = useState('asc');
+  
+  // Bulk delete functionality
+  const [selectedCustomers, setSelectedCustomers] = useState(new Set());
+  const [showBulkDeleteModal, setShowBulkDeleteModal] = useState(false);
+  const [bulkDeleteLoading, setBulkDeleteLoading] = useState(false);
 
   useEffect(() => {
     fetchCustomerData();
   }, []);
-
-  // Check if migration has been completed by looking for customer IDs
-  useEffect(() => {
-    const checkMigrationStatus = () => {
-      // Check if any customers are missing customer IDs or have long IDs that need migration
-      const hasCustomersNeedingMigration = Object.values(customers).some(customer => {
-        // Customers without IDs need migration
-        if (!customer.customerId) return true;
-        // Customers with long IDs (CUST-...) need migration
-        if (customer.customerId && customer.customerId.startsWith('CUST-')) return true;
-        // Customers with long cus- IDs (like cus-1753710032884) need migration
-        if (customer.customerId && customer.customerId.startsWith('cus-') && customer.customerId.length > 10) return true;
-        // Customers with phone numbers as IDs need migration
-        if (customer.customerId && customer.customerId === customer.phone) return true;
-        return false;
-      });
-      
-      console.log('Migration status check:', {
-        totalCustomers: Object.keys(customers).length,
-        customersNeedingMigration: Object.values(customers).filter(customer => {
-          if (!customer.customerId) return true;
-          if (customer.customerId && customer.customerId.startsWith('CUST-')) return true;
-          if (customer.customerId && customer.customerId.startsWith('cus-') && customer.customerId.length > 10) return true;
-          if (customer.customerId && customer.customerId === customer.phone) return true;
-          return false;
-        }).length,
-        hasCustomersNeedingMigration,
-        migrationCompleted: !hasCustomersNeedingMigration && Object.keys(customers).length > 0
-      });
-      
-      if (!hasCustomersNeedingMigration && Object.keys(customers).length > 0) {
-        setMigrationCompleted(true);
-      } else {
-        setMigrationCompleted(false);
-      }
-    };
-    
-    if (!loading && Object.keys(customers).length > 0) {
-      checkMigrationStatus();
-    }
-  }, [customers, loading]);
 
   const fetchCustomerData = async () => {
     try {
@@ -169,6 +134,11 @@ function CustomerManagement() {
             customerData[customerKey].names.push(cleanName);
           }
           
+          // Preserve customerId if it exists in the current sale and the existing customerId is null
+          if (sale.customerId && !customerData[customerKey].customerId) {
+            customerData[customerKey].customerId = sale.customerId;
+          }
+          
           customerData[customerKey].totalAmount += sale.totalAmount || 0;
           customerData[customerKey].paidAmount += sale.paidAmount || 0;
           customerData[customerKey].remainingAmount += sale.remainingAmount || 0;
@@ -202,18 +172,6 @@ function CustomerManagement() {
     }
   };
 
-  // Helper to check if a date is today
-  const isToday = (dateString) => {
-    const today = new Date();
-    const date = new Date(dateString);
-    return (
-      date.getFullYear() === today.getFullYear() &&
-      date.getMonth() === today.getMonth() &&
-      date.getDate() === today.getDate()
-    );
-  };
-
-  // Helper to check if a date matches the selected print date (robust to format/timezone)
   const isPrintDate = (dateString) => {
     const selected = new Date(printDate);
     const saleDate = new Date(dateString);
@@ -224,7 +182,6 @@ function CustomerManagement() {
     );
   };
 
-  // New print handler to use modal values
   const handlePrintWithDebt = () => {
     if (!printCustomer) return;
     const customer = printCustomer;
@@ -304,7 +261,7 @@ function CustomerManagement() {
     console.log('handlePrintWithDebt Debug:', {
       customerName,
       customerPhone: customer.phone,
-      customerId: customer.customerId || customer.phone,
+      customerId: customer.customerId,
       totalAmount,
       paidAmountForSelectedMonth,
       remainingAmount,
@@ -314,7 +271,7 @@ function CustomerManagement() {
     const html = generatePrintableHTML({
       customerName,
       customerPhone: customer.phone,
-      customerId: customer.customerId || customer.phone,
+      customerId: customer.customerId,
       items,
       totalAmount,
       paidAmount: paidAmountForSelectedMonth,
@@ -391,7 +348,7 @@ function CustomerManagement() {
     console.log('handlePrint Debug:', {
       customerName,
       customerPhone: customer.phone,
-      customerId: customer.customerId || customer.phone,
+      customerId: customer.customerId,
       totalAmount,
       paidAmountForSelectedMonth,
       remainingAmount,
@@ -401,7 +358,7 @@ function CustomerManagement() {
     const html = generatePrintableHTML({
       customerName,
       customerPhone: customer.phone,
-      customerId: customer.customerId || customer.phone,
+      customerId: customer.customerId,
       items,
       totalAmount,
       paidAmount: paidAmountForSelectedMonth,
@@ -504,7 +461,7 @@ function CustomerManagement() {
   const handlePaymentSubmit = async (e) => {
     e.preventDefault();
     const amount = Math.round(parseFloat(paymentAmount));
-    const remaining = Math.round(paymentCustomer.remainingAmount);
+    // const remaining = Math.round(paymentCustomer.remainingAmount);
     const newErrors = {};
     if (!paymentAmount || amount <= 0) {
       newErrors.amount = 'Please enter a valid payment amount';
@@ -586,7 +543,7 @@ function CustomerManagement() {
     console.log('handlePrintSale Debug:', {
       customerName: (customer.names && customer.names[0]) || customer.name || '-',
       customerPhone: customer.phone,
-      customerId: customer.customerId || customer.phone,
+      customerId: customer.customerId,
       totalAmount: sale.totalAmount,
       paidAmount: sale.paidAmount || 0,
       remainingAmount: sale.remainingAmount || 0,
@@ -597,7 +554,7 @@ function CustomerManagement() {
     const html = generatePrintableHTML({
       customerName: (customer.names && customer.names[0]) || customer.name || '-',
       customerPhone: customer.phone,
-      customerId: customer.customerId || customer.phone,
+      customerId: customer.customerId,
       items: sale.items || [],
       totalAmount: sale.totalAmount,
       paidAmount: sale.paidAmount || 0,
@@ -638,7 +595,67 @@ function CustomerManagement() {
     return nameMatch || phoneMatch;
   });
 
-  // Enhanced debugging
+  // Sort the filtered customers
+  const sortedCustomers = [...filteredCustomers].sort((a, b) => {
+    let aValue, bValue;
+    
+    switch (sortField) {
+      case 'customerId':
+        aValue = a.customerId || a.phone || '';
+        bValue = b.customerId || b.phone || '';
+        // Handle numeric customer IDs
+        if (!isNaN(aValue) && !isNaN(bValue)) {
+          aValue = parseInt(aValue);
+          bValue = parseInt(bValue);
+        }
+        break;
+      case 'name':
+        aValue = a.names?.join(', ') || '';
+        bValue = b.names?.join(', ') || '';
+        break;
+      case 'phone':
+        aValue = a.phone || '';
+        bValue = b.phone || '';
+        break;
+      case 'totalAmount':
+        aValue = a.totalAmount || 0;
+        bValue = b.totalAmount || 0;
+        break;
+      case 'paidAmount':
+        aValue = a.paidAmount || 0;
+        bValue = b.paidAmount || 0;
+        break;
+      case 'remainingAmount':
+        aValue = a.remainingAmount || 0;
+        bValue = b.remainingAmount || 0;
+        break;
+      default:
+        aValue = a.customerId || a.phone || '';
+        bValue = b.customerId || b.phone || '';
+    }
+    
+    // Handle string comparison
+    if (typeof aValue === 'string' && typeof bValue === 'string') {
+      aValue = aValue.toLowerCase();
+      bValue = bValue.toLowerCase();
+    }
+    
+    if (sortDirection === 'asc') {
+      return aValue < bValue ? -1 : aValue > bValue ? 1 : 0;
+    } else {
+      return aValue > bValue ? -1 : aValue < bValue ? 1 : 0;
+    }
+  });
+
+  const handleSort = (field) => {
+    if (sortField === field) {
+      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortField(field);
+      setSortDirection('asc');
+    }
+  };
+
   useEffect(() => {
     console.log('=== CUSTOMER DATA DEBUG ===');
     console.log('Search term:', searchTerm);
@@ -698,18 +715,45 @@ function CustomerManagement() {
       errors.reason = 'Reason is required when adding pending amount';
     }
     
-    setAddCustomerErrors(errors);
-    if (Object.keys(errors).length > 0) return;
+    // Validate custom customer ID if provided
+    if (newCustomer.customerId.trim()) {
+      const customerIdPattern = /^[a-zA-Z0-9-_]+$/;
+      if (!customerIdPattern.test(newCustomer.customerId.trim())) {
+        errors.customerId = 'Customer ID can only contain letters, numbers, hyphens, and underscores';
+      } else {
+        // Check if the custom ID already exists
+        try {
+          const idExists = await checkCustomerIdExists(db, newCustomer.customerId.trim());
+          if (idExists) {
+            errors.customerId = 'This Customer ID already exists. Please choose a different one.';
+          }
+        } catch (error) {
+          console.error('Error checking customer ID:', error);
+          errors.customerId = 'Error checking if Customer ID exists. Please try again.';
+        }
+      }
+    }
+    
+    // Set errors and return if any validation failed
+    if (Object.keys(errors).length > 0) {
+      setAddCustomerErrors(errors);
+      return;
+    }
 
     try {
-      // Generate a unique, readable customer ID
-      const customerId = await generateUniqueCustomerId(db);
+      // Use custom customer ID if provided, otherwise generate a unique one
+      let customerId;
+      if (newCustomer.customerId.trim()) {
+        customerId = newCustomer.customerId.trim();
+      } else {
+        customerId = await generateUniqueCustomerId(db);
+      }
       
       // Add new customer as a receipt with the pending amount if provided
       const receiptData = {
         customerName: newCustomer.name.trim(),
         customerPhone: newCustomer.phone.trim(),
-        customerId: customerId, // Use generated unique ID
+        customerId: customerId, // Use custom ID or generated ID
         totalAmount: Number(newCustomer.pendingAmount) || 0,
         paidAmount: 0,
         remainingAmount: Number(newCustomer.pendingAmount) || 0,
@@ -723,7 +767,7 @@ function CustomerManagement() {
       await addDoc(collection(db, 'receipts'), receiptData);
       
       // Reset form and close modal
-      setNewCustomer({ name: '', phone: '', pendingAmount: '' });
+      setNewCustomer({ name: '', phone: '', pendingAmount: '', customerId: '' });
       setNewCustomerReason('');
       setAddCustomerErrors({});
       setShowAddCustomerModal(false);
@@ -747,6 +791,14 @@ function CustomerManagement() {
       errors.phone = 'Phone number is required';
     }
     
+    // Validate customer ID format if provided
+    if (editCustomerData.customerId.trim()) {
+      const customerIdPattern = /^[a-zA-Z0-9-_]+$/;
+      if (!customerIdPattern.test(editCustomerData.customerId.trim())) {
+        errors.customerId = 'Customer ID can only contain letters, numbers, hyphens, and underscores';
+      }
+    }
+    
     setEditCustomerErrors(errors);
     if (Object.keys(errors).length > 0) return;
 
@@ -759,12 +811,12 @@ function CustomerManagement() {
         await updateDoc(saleDoc, {
           customerName: editCustomerData.name.trim(),
           customerPhone: editCustomerData.phone.trim(),
-          customerId: editingCustomer.customerId || editingCustomer.phone // Preserve existing customer ID
+          customerId: editCustomerData.customerId.trim() || editingCustomer.customerId || editingCustomer.phone
         });
       }
       
       // Reset form and close modal
-      setEditCustomerData({ name: '', phone: '' });
+      setEditCustomerData({ name: '', phone: '', customerId: '' });
       setEditCustomerErrors({});
       setShowEditCustomerModal(false);
       setEditingCustomer(null);
@@ -801,7 +853,6 @@ function CustomerManagement() {
     }
   };
 
-  // Download customer details as PDF file
   const handleDownloadCustomerDetails = async (customer) => {
     try {
       const customerName = (customer.names && customer.names[0]) || customer.phone || 'Unknown';
@@ -1067,25 +1118,56 @@ function CustomerManagement() {
     }
   };
 
-  const handleMigrateCustomerIds = async () => {
-    if (!window.confirm('This will add unique customer IDs to all existing receipts. This process may take a few minutes. Continue?')) {
-      return;
+  // Bulk delete functionality
+  const handleSelectCustomer = (customerPhone) => {
+    const newSelected = new Set(selectedCustomers);
+    if (newSelected.has(customerPhone)) {
+      newSelected.delete(customerPhone);
+    } else {
+      newSelected.add(customerPhone);
     }
-    
-    setMigrating(true);
-    try {
-      await migrateExistingCustomerIds();
-      alert('Customer ID migration completed successfully!');
-      setMigrationCompleted(true);
-      // Refresh the customer data to show the new customer IDs
-      await fetchCustomerData();
-    } catch (error) {
-      console.error('Migration failed:', error);
-      alert('Migration failed: ' + error.message);
-    } finally {
-      setMigrating(false);
+    setSelectedCustomers(newSelected);
+  };
+
+  const handleSelectAllCustomers = () => {
+    if (selectedCustomers.size === sortedCustomers.length) {
+      setSelectedCustomers(new Set());
+    } else {
+      setSelectedCustomers(new Set(sortedCustomers.map(c => c.phone)));
     }
   };
+
+  const handleBulkDelete = async () => {
+    if (!window.confirm(`Are you sure you want to delete ${selectedCustomers.size} selected customers? This action cannot be undone.`)) {
+      return;
+    }
+
+    setBulkDeleteLoading(true);
+    try {
+      const customersToDelete = sortedCustomers.filter(c => selectedCustomers.has(c.phone));
+      
+      for (const customer of customersToDelete) {
+        // Delete all sales for this customer
+        for (const sale of customer.sales) {
+          if (sale.id) {
+            await deleteDoc(doc(db, 'receipts', sale.id));
+          }
+        }
+      }
+      
+      setSelectedCustomers(new Set());
+      setShowBulkDeleteModal(false);
+      await fetchCustomerData();
+      alert(`Successfully deleted ${customersToDelete.length} customers.`);
+    } catch (error) {
+      console.error('Bulk delete failed:', error);
+      alert('Bulk delete failed: ' + error.message);
+    } finally {
+      setBulkDeleteLoading(false);
+    }
+  };
+
+
 
   if (loading) {
     return (
@@ -1112,24 +1194,14 @@ function CustomerManagement() {
           >
             Search by Customer ID
           </button>
-          {/* {!migrationCompleted && (
+          {selectedCustomers.size > 0 && (
             <button
-              onClick={handleMigrateCustomerIds}
-              disabled={migrating}
-              className={`px-4 py-2 rounded-md shadow-sm transition-all ${
-                migrating 
-                  ? 'bg-gray-400 cursor-not-allowed' 
-                  : 'bg-orange-600 hover:bg-orange-700 text-white'
-              }`}
+              onClick={() => setShowBulkDeleteModal(true)}
+              className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-md shadow-sm transition-all"
             >
-              {migrating ? 'Migrating...' : 'Migrate Customer IDs'}
+              Delete Selected ({selectedCustomers.size})
             </button>
           )}
-          {migrationCompleted && (
-            <div className="px-4 py-2 bg-green-100 text-green-800 rounded-md text-sm">
-              ✓ Customer IDs migrated
-            </div>
-          )} */}
           <div className="w-64">
             <input
               type="text"
@@ -1148,31 +1220,119 @@ function CustomerManagement() {
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
               <tr>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-32">Customer ID</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-48 max-w-48">Names</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-32">Phone</th>
-                <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider w-32">Total (PKR)</th>
-                <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider w-32">Paid (PKR)</th>
-                <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider w-32">Remaining (PKR)</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-8">
+                  <input
+                    type="checkbox"
+                    checked={selectedCustomers.size === sortedCustomers.length && sortedCustomers.length > 0}
+                    onChange={handleSelectAllCustomers}
+                    className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                  />
+                </th>
+                <th 
+                  className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-32 cursor-pointer hover:bg-gray-100 transition-colors"
+                  onClick={() => handleSort('customerId')}
+                >
+                  <div className="flex items-center space-x-1">
+                    <span>Customer ID</span>
+                    {sortField === 'customerId' && (
+                      <svg className={`w-4 h-4 text-blue-600 ${sortDirection === 'asc' ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
+                      </svg>
+                    )}
+                  </div>
+                </th>
+                <th 
+                  className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-48 max-w-48 cursor-pointer hover:bg-gray-100 transition-colors"
+                  onClick={() => handleSort('name')}
+                >
+                  <div className="flex items-center space-x-1">
+                    <span>Names</span>
+                    {sortField === 'name' && (
+                      <svg className={`w-4 h-4 text-blue-600 ${sortDirection === 'asc' ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
+                      </svg>
+                    )}
+                  </div>
+                </th>
+                <th 
+                  className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-32 cursor-pointer hover:bg-gray-100 transition-colors"
+                  onClick={() => handleSort('phone')}
+                >
+                  <div className="flex items-center space-x-1">
+                    <span>Phone</span>
+                    {sortField === 'phone' && (
+                      <svg className={`w-4 h-4 text-blue-600 ${sortDirection === 'asc' ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
+                      </svg>
+                    )}
+                  </div>
+                </th>
+                <th 
+                  className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider w-32 cursor-pointer hover:bg-gray-100 transition-colors"
+                  onClick={() => handleSort('totalAmount')}
+                >
+                  <div className="flex items-center justify-end space-x-1">
+                    <span>Total (PKR)</span>
+                    {sortField === 'totalAmount' && (
+                      <svg className={`w-4 h-4 text-blue-600 ${sortDirection === 'asc' ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
+                      </svg>
+                    )}
+                  </div>
+                </th>
+                <th 
+                  className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider w-32 cursor-pointer hover:bg-gray-100 transition-colors"
+                  onClick={() => handleSort('paidAmount')}
+                >
+                  <div className="flex items-center justify-end space-x-1">
+                    <span>Paid (PKR)</span>
+                    {sortField === 'paidAmount' && (
+                      <svg className={`w-4 h-4 text-blue-600 ${sortDirection === 'asc' ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
+                      </svg>
+                    )}
+                  </div>
+                </th>
+                <th 
+                  className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider w-32 cursor-pointer hover:bg-gray-100 transition-colors"
+                  onClick={() => handleSort('remainingAmount')}
+                >
+                  <div className="flex items-center justify-end space-x-1">
+                    <span>Remaining (PKR)</span>
+                    {sortField === 'remainingAmount' && (
+                      <svg className={`w-4 h-4 text-blue-600 ${sortDirection === 'asc' ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
+                      </svg>
+                    )}
+                  </div>
+                </th>
                 <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider w-48">Actions</th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
-              {filteredCustomers.length === 0 ? (
+              {sortedCustomers.length === 0 ? (
                 <tr>
-                  <td colSpan="7" className="px-6 py-4 text-center text-gray-500">
+                  <td colSpan="8" className="px-6 py-4 text-center text-gray-500">
                     {Object.keys(customers).length === 0 
                       ? 'No customers found. Add your first customer or check if data is loading properly.'
                       : 'No customers match your search criteria.'}
                   </td>
                 </tr>
               ) : (
-                filteredCustomers.map((customer, index) => {
+                sortedCustomers.map((customer, index) => {
                   return (
                     <tr key={index} className={`hover:bg-gray-50 ${customer.remainingAmount > 0 ? 'bg-red-50' : customer.remainingAmount < 0 ? 'bg-green-50' : ''}`}>
-                                          <td className="px-4 py-4 w-32">
-                      <div className="text-xs text-gray-700 font-mono">{customer.customerId || customer.phone}</div>
-                    </td>
+                      <td className="px-4 py-4 w-8">
+                        <input
+                          type="checkbox"
+                          checked={selectedCustomers.has(customer.phone)}
+                          onChange={() => handleSelectCustomer(customer.phone)}
+                          className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                        />
+                      </td>
+                      <td className="px-4 py-4 w-32">
+                        <div className="text-xs text-gray-700 font-mono">{customer.customerId || customer.phone}</div>
+                      </td>
                       <td className="px-4 py-4 w-48 max-w-48">
                         <div className="text-sm text-gray-900 font-medium break-words">{customer.names?.join(', ') || 'N/A'}</div>
                       </td>
@@ -1307,7 +1467,8 @@ function CustomerManagement() {
                             setEditingCustomer(customer);
                             setEditCustomerData({
                               name: customer.names?.[0] || '',
-                              phone: customer.phone || ''
+                              phone: customer.phone || '',
+                              customerId: customer.customerId || ''
                             });
                             setEditCustomerErrors({});
                             setShowEditCustomerModal(true);
@@ -1816,7 +1977,7 @@ function CustomerManagement() {
               addDoc(collection(db, 'receipts'), {
                 customerName: pendingCustomer.names?.[0] || '',
                 customerPhone: pendingCustomer.phone,
-                customerId: pendingCustomer.customerId || pendingCustomer.phone, // Use existing customer ID or phone
+                customerId: pendingCustomer.customerId || pendingCustomer.phone, // Use customer ID as priority
                 totalAmount: Number(pendingAmount),
                 paidAmount: 0,
                 remainingAmount: Number(pendingAmount),
@@ -1902,7 +2063,7 @@ function CustomerManagement() {
               <button
                 onClick={() => {
                   setShowAddCustomerModal(false);
-                  setNewCustomer({ name: '', phone: '', pendingAmount: '' });
+                  setNewCustomer({ name: '', phone: '', pendingAmount: '', customerId: '' });
                   setNewCustomerReason('');
                   setAddCustomerErrors({});
                 }}
@@ -1935,6 +2096,18 @@ function CustomerManagement() {
                 {addCustomerErrors.phone && <p className="text-red-600 text-xs mt-1">{addCustomerErrors.phone}</p>}
               </div>
               <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-1">Custom Customer ID (Optional)</label>
+                <input
+                  type="text"
+                  value={newCustomer.customerId}
+                  onChange={e => setNewCustomer({ ...newCustomer, customerId: e.target.value })}
+                  className={`w-full px-4 py-2 border rounded-md shadow-sm ${addCustomerErrors.customerId ? 'border-red-500' : 'border-gray-300'}`}
+                  placeholder="e.g., CUST001, VIP-123, etc."
+                />
+                {addCustomerErrors.customerId && <p className="text-red-600 text-xs mt-1">{addCustomerErrors.customerId}</p>}
+                <p className="text-xs text-gray-500 mt-1">Leave empty to auto-generate a customer ID</p>
+              </div>
+              <div className="mb-4">
                 <label className="block text-sm font-medium text-gray-700 mb-1">Pending Amount (PKR) - Optional</label>
                 <input
                   type="number"
@@ -1963,7 +2136,7 @@ function CustomerManagement() {
                   type="button"
                   onClick={() => {
                     setShowAddCustomerModal(false);
-                    setNewCustomer({ name: '', phone: '', pendingAmount: '' });
+                    setNewCustomer({ name: '', phone: '', pendingAmount: '', customerId: '' });
                     setNewCustomerReason('');
                     setAddCustomerErrors({});
                   }}
@@ -2106,6 +2279,57 @@ function CustomerManagement() {
                 className="px-4 py-2 bg-red-600 text-white rounded-md shadow-sm hover:bg-red-700"
               >
                 Delete Customer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Delete Confirmation Modal */}
+      {showBulkDeleteModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-[100]">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">Bulk Delete Customers</h3>
+              <button
+                onClick={() => setShowBulkDeleteModal(false)}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="mb-6">
+              <div className="p-4 bg-red-50 border border-red-200 rounded-md mb-4">
+                <p className="text-sm text-red-800">
+                  <strong>Warning:</strong> This action cannot be undone. All sales records for the selected customers will be permanently deleted.
+                </p>
+              </div>
+              <div className="space-y-2">
+                <p className="text-sm text-gray-700">
+                  <strong>Selected Customers:</strong> {selectedCustomers.size}
+                </p>
+                <p className="text-sm text-gray-700">
+                  <strong>Total Sales Records:</strong> {filteredCustomers.filter(c => selectedCustomers.has(c.phone)).reduce((sum, c) => sum + (c.sales?.length || 0), 0)}
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end space-x-3">
+              <button
+                onClick={() => setShowBulkDeleteModal(false)}
+                className="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-gray-700 hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleBulkDelete}
+                disabled={bulkDeleteLoading}
+                className={`px-4 py-2 rounded-md shadow-sm ${
+                  bulkDeleteLoading 
+                    ? 'bg-gray-400 cursor-not-allowed' 
+                    : 'bg-red-600 hover:bg-red-700 text-white'
+                }`}
+              >
+                {bulkDeleteLoading ? 'Deleting...' : 'Delete Selected Customers'}
               </button>
             </div>
           </div>

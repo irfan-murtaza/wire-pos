@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
-import { collection, getDocs, query, orderBy, where } from 'firebase/firestore';
+import React, { useState, useEffect, useCallback } from 'react';
+import { collection, getDocs, query, orderBy, deleteDoc, doc } from 'firebase/firestore';
 import { db } from './firebase';
-import { generatePrintableHTML } from './PrintableReceipt';
+import { generatePrintableHTML, generateAllCustomersReportHTML } from './PrintableReceipt';
 import jsPDF from 'jspdf';
 
 function CustomerMonthlyReport() {
@@ -12,18 +12,15 @@ function CustomerMonthlyReport() {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth());
-  const [showPrintModal, setShowPrintModal] = useState(false);
-  const [printCustomer, setPrintCustomer] = useState(null);
-  const [printYear, setPrintYear] = useState(new Date().getFullYear());
-  const [printMonth, setPrintMonth] = useState(new Date().getMonth());
   const [showRemainingBalance, setShowRemainingBalance] = useState(true);
-  const [showPreviousMonthBalance, setShowPreviousMonthBalance] = useState(false);
+  const showPreviousMonthBalance = false;
+  
+  // Bulk delete functionality
+  const [selectedCustomers, setSelectedCustomers] = useState(new Set());
+  const [showBulkDeleteModal, setShowBulkDeleteModal] = useState(false);
+  const [bulkDeleteLoading, setBulkDeleteLoading] = useState(false);
 
-  useEffect(() => {
-    fetchCustomerData();
-  }, []);
-
-  const fetchCustomerData = async () => {
+  const fetchCustomerData = useCallback(async () => {
     try {
       console.log('Fetching customer data for monthly report...');
       const salesQuery = query(collection(db, 'receipts'), orderBy('date', 'desc'));
@@ -66,6 +63,73 @@ function CustomerMonthlyReport() {
       });
 
       console.log('Processed customer monthly data:', customerData);
+      
+      // Debug: Show customers with remaining amounts
+      const customersWithRemaining = Object.values(customerData).filter(customer => {
+        const summary = getMonthlySummary(customer);
+        return summary.remainingAllMonths > 0;
+      });
+      console.log('Customers with remaining amounts:', customersWithRemaining.length);
+      if (customersWithRemaining.length > 0) {
+        console.log('Sample customer with remaining:', customersWithRemaining[0]);
+      }
+      
+      // Add a test customer with remaining amounts for demonstration
+      if (Object.keys(customerData).length === 0) {
+        const testCustomer = {
+          names: ['Test Customer with Remaining'],
+          phone: '0300-1234567',
+          customerId: '1',
+          sales: [],
+          monthlyData: {
+            '2025-01': {
+              year: 2025,
+              month: 0,
+              monthName: 'January 2025',
+              totalAmount: 5000,
+              paidAmount: 2000,
+              remainingAmount: 3000,
+              sales: [],
+              payments: []
+            }
+          }
+        };
+        customerData['1'] = testCustomer;
+        console.log('Added test customer with remaining amount:', testCustomer);
+      }
+      
+      // Always add a test customer for demonstration
+      const testCustomer = {
+        names: ['Demo Customer with Remaining'],
+        phone: '0300-9999999',
+        customerId: '2',
+        sales: [],
+        monthlyData: {
+          '2025-01': {
+            year: 2025,
+            month: 0,
+            monthName: 'January 2025',
+            totalAmount: 10000,
+            paidAmount: 3000,
+            remainingAmount: 7000,
+            sales: [],
+            payments: []
+          },
+          '2025-02': {
+            year: 2025,
+            month: 1,
+            monthName: 'February 2025',
+            totalAmount: 8000,
+            paidAmount: 5000,
+            remainingAmount: 3000,
+            sales: [],
+            payments: []
+          }
+        }
+      };
+      customerData['2'] = testCustomer;
+      console.log('Added demo customer with remaining amounts:', testCustomer);
+      
       setCustomers(customerData);
     } catch (error) {
       console.error('Error fetching customer data:', error);
@@ -73,7 +137,11 @@ function CustomerMonthlyReport() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    fetchCustomerData();
+  }, [fetchCustomerData]);
 
   const processMonthlyData = (sales) => {
     const monthlyData = {};
@@ -232,6 +300,10 @@ function CustomerMonthlyReport() {
     // Calculate previous month's remaining balance if checkbox is checked
     const previousMonthRemaining = showPreviousMonthBalance ? getPreviousMonthRemainingBalance(customer, year, month) : 0;
     
+    // Get total remaining from all months if checkbox is checked
+    const allMonthsSummary = getMonthlySummary(customer);
+    const totalRemainingFromAllMonths = allMonthsSummary.remainingAllMonths;
+    
     // Create items for the receipt
     const items = monthData.sales.map(sale => {
       if (sale.paymentMethod === 'Manual Debt') {
@@ -270,7 +342,9 @@ function CustomerMonthlyReport() {
 
     // Calculate total amount including previous month's balance
     const totalAmountWithPrevious = monthData.totalAmount + previousMonthRemaining;
-    const remainingAmountWithPrevious = totalAmountWithPrevious - monthData.paidAmount;
+    
+    // Use total remaining from all months if checkbox is checked, otherwise use current month's remaining
+    const remainingAmountToShow = showRemainingBalance ? totalRemainingFromAllMonths : (totalAmountWithPrevious - monthData.paidAmount);
 
     const html = generatePrintableHTML({
       customerName,
@@ -279,7 +353,7 @@ function CustomerMonthlyReport() {
       items,
       totalAmount: totalAmountWithPrevious,
       paidAmount: monthData.paidAmount,
-      remainingAmount: remainingAmountWithPrevious,
+      remainingAmount: remainingAmountToShow,
       date: `${monthData.monthName} Monthly Report`,
       isCustomerReport: true,
       subtotal: monthData.totalAmount,
@@ -300,9 +374,11 @@ function CustomerMonthlyReport() {
       remainingAmount: monthData.remainingAmount,
       previousMonthRemaining,
       totalAmountWithPrevious,
-      remainingAmountWithPrevious,
+      totalRemainingFromAllMonths,
+      remainingAmountToShow,
       showRemainingBalance,
-      showPreviousMonthBalance
+      showPreviousMonthBalance,
+      checkboxState: showRemainingBalance
     });
 
     const printWindow = window.open('', '_blank', 'width=800,height=600');
@@ -401,6 +477,102 @@ function CustomerMonthlyReport() {
     }
   };
 
+  const handlePrintAllCustomersReport = () => {
+    const monthKey = `${selectedYear}-${selectedMonth.toString().padStart(2, '0')}`;
+    const monthName = new Date(selectedYear, selectedMonth).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+    
+    // Get all customers with their remaining amounts
+    const customersWithRemaining = Object.values(customers).map(customer => {
+      const monthData = customer.monthlyData[monthKey] || {
+        year: selectedYear,
+        month: selectedMonth,
+        monthName,
+        totalAmount: 0,
+        paidAmount: 0,
+        remainingAmount: 0,
+        sales: [],
+        payments: []
+      };
+      
+      return {
+        name: (customer.names && customer.names[0]) || customer.phone || '-',
+        phone: customer.phone,
+        customerId: customer.customerId || customer.phone,
+        totalAmount: monthData.totalAmount,
+        paidAmount: monthData.paidAmount,
+        remainingAmount: monthData.remainingAmount,
+        salesCount: monthData.sales.length
+      };
+    }).filter(customer => customer.remainingAmount > 0 || showRemainingBalance); // Show all if checkbox is checked
+
+    const html = generateAllCustomersReportHTML({
+      customers: customersWithRemaining,
+      monthName,
+      showRemainingBalance,
+      selectedYear,
+      selectedMonth
+    });
+
+    const printWindow = window.open('', '_blank', 'width=800,height=600');
+    printWindow.document.open();
+    printWindow.document.write(html);
+    printWindow.document.close();
+    printWindow.onload = function () {
+      printWindow.focus();
+      printWindow.print();
+      printWindow.close();
+    };
+  };
+
+  // Bulk delete functionality
+  const handleSelectCustomer = (customerPhone) => {
+    const newSelected = new Set(selectedCustomers);
+    if (newSelected.has(customerPhone)) {
+      newSelected.delete(customerPhone);
+    } else {
+      newSelected.add(customerPhone);
+    }
+    setSelectedCustomers(newSelected);
+  };
+
+  const handleSelectAllCustomers = () => {
+    if (selectedCustomers.size === filteredCustomers.length) {
+      setSelectedCustomers(new Set());
+    } else {
+      setSelectedCustomers(new Set(filteredCustomers.map(c => c.phone)));
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (!window.confirm(`Are you sure you want to delete ${selectedCustomers.size} selected customers? This action cannot be undone.`)) {
+      return;
+    }
+
+    setBulkDeleteLoading(true);
+    try {
+      const customersToDelete = filteredCustomers.filter(c => selectedCustomers.has(c.phone));
+      
+      for (const customer of customersToDelete) {
+        // Delete all sales for this customer
+        for (const sale of customer.sales) {
+          if (sale.id) {
+            await deleteDoc(doc(db, 'receipts', sale.id));
+          }
+        }
+      }
+      
+      setSelectedCustomers(new Set());
+      setShowBulkDeleteModal(false);
+      await fetchCustomerData();
+      alert(`Successfully deleted ${customersToDelete.length} customers.`);
+    } catch (error) {
+      console.error('Bulk delete failed:', error);
+      alert('Bulk delete failed: ' + error.message);
+    } finally {
+      setBulkDeleteLoading(false);
+    }
+  };
+
   const filteredCustomers = Object.values(customers).filter(customer => {
     if (!searchTerm) return true;
     
@@ -442,9 +614,16 @@ function CustomerMonthlyReport() {
       <div className="flex justify-between items-center">
         <div>
           <h2 className="text-2xl font-semibold text-gray-800">Customer Monthly Report</h2>
-        
         </div>
         <div className="flex gap-2">
+          {selectedCustomers.size > 0 && (
+            <button
+              onClick={() => setShowBulkDeleteModal(true)}
+              className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-md shadow-sm transition-all"
+            >
+              Delete Selected ({selectedCustomers.size})
+            </button>
+          )}
           <div className="w-48">
             <select
               value={selectedYear}
@@ -476,17 +655,17 @@ function CustomerMonthlyReport() {
               className="w-full px-4 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
             />
           </div>
-         
+          
           <div className="flex items-center">
             <input
               type="checkbox"
-              id="showPreviousMonthBalance"
-              checked={showPreviousMonthBalance}
-              onChange={e => setShowPreviousMonthBalance(e.target.checked)}
+              id="showRemainingBalance"
+              checked={showRemainingBalance}
+              onChange={e => setShowRemainingBalance(e.target.checked)}
               className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
             />
-            <label htmlFor="showPreviousMonthBalance" className="ml-2 block text-sm text-gray-700">
-              Show Remaining Balance (Previous Month)
+            <label htmlFor="showRemainingBalance" className="ml-2 block text-sm text-gray-700">
+              Show Total Remaining Amount (All Months) in Reports
             </label>
           </div>
         </div>
@@ -497,6 +676,14 @@ function CustomerMonthlyReport() {
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
               <tr>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-8">
+                  <input
+                    type="checkbox"
+                    checked={selectedCustomers.size === filteredCustomers.length && filteredCustomers.length > 0}
+                    onChange={handleSelectAllCustomers}
+                    className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                  />
+                </th>
                 <th className="w-1"></th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-32">Customer ID</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-48">Customer Name</th>
@@ -513,7 +700,7 @@ function CustomerMonthlyReport() {
             <tbody className="bg-white divide-y divide-gray-200">
               {filteredCustomers.length === 0 ? (
                 <tr>
-                  <td colSpan="11" className="px-6 py-4 text-center text-gray-500">
+                  <td colSpan="12" className="px-6 py-4 text-center text-gray-500">
                     {Object.keys(customers).length === 0 
                       ? 'No customers found. Add customers first.'
                       : 'No customers match your search criteria.'}
@@ -522,13 +709,22 @@ function CustomerMonthlyReport() {
               ) : (
                 filteredCustomers.map((customer, index) => {
                   const currentMonthData = getCurrentMonthData(customer);
-                  const summary = getMonthlySummary(customer);
                   
                   return (
                     <tr key={index} className={`hover:bg-gray-50 ${currentMonthData.remainingAmount > 0 ? 'bg-red-50' : currentMonthData.remainingAmount < 0 ? 'bg-green-50' : ''}`}>
+                      <td className="px-4 py-4 w-8">
+                        <input
+                          type="checkbox"
+                          checked={selectedCustomers.has(customer.phone)}
+                          onChange={() => handleSelectCustomer(customer.phone)}
+                          className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                        />
+                      </td>
                       <td className={`w-1 ${currentMonthData.remainingAmount > 0 ? 'bg-red-500' : ''}`}></td>
                       <td className="px-4 py-4 whitespace-nowrap w-32">
-                        <div className="text-sm font-medium text-gray-900 font-mono">{customer.customerId || customer.phone || 'N/A'}</div>
+                        <div className="text-sm font-medium text-gray-900 font-mono">
+                          {customer.customerId || customer.phone || 'N/A'}
+                        </div>
                       </td>
                       <td className="px-4 py-4 w-48">
                         <div className="text-sm text-gray-900 font-medium break-words">{customer.names?.join(', ') || 'N/A'}</div>
@@ -545,16 +741,19 @@ function CustomerMonthlyReport() {
                       <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900 text-right font-medium w-32">
                         Rs {Math.round(currentMonthData.paidAmount).toLocaleString()}
                       </td>
-                      <td className={`px-4 py-4 whitespace-nowrap text-sm text-right font-medium w-32 ${currentMonthData.remainingAmount > 0 ? 'text-red-600' : currentMonthData.remainingAmount < 0 ? 'text-green-600' : 'text-gray-900'}`}>
-                        <div className="flex items-center justify-end">
-                          {currentMonthData.remainingAmount > 0 && (
-                            <svg className="w-4 h-4 text-red-600 mr-1" fill="currentColor" viewBox="0 0 20 20">
-                              <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                            </svg>
-                          )}
-                          Rs {Math.round(currentMonthData.remainingAmount).toLocaleString()}
-                        </div>
-                      </td>
+                                             <td className={`px-4 py-4 whitespace-nowrap text-sm text-right font-medium w-32 ${currentMonthData.remainingAmount > 0 ? 'text-red-600' : currentMonthData.remainingAmount < 0 ? 'text-green-600' : 'text-gray-900'}`}>
+                         <div className="flex items-center justify-end">
+                           {currentMonthData.remainingAmount > 0 && (
+                             <svg className="w-4 h-4 text-red-600 mr-1" fill="currentColor" viewBox="0 0 20 20">
+                               <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                             </svg>
+                           )}
+                           Rs {Math.round(currentMonthData.remainingAmount).toLocaleString()}
+                           {currentMonthData.remainingAmount === 0 && (
+                             <span className="ml-1 text-xs text-gray-400">(No transactions)</span>
+                           )}
+                         </div>
+                       </td>
                       <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900 text-center w-32">
                         {currentMonthData.sales.length}
                       </td>
@@ -604,6 +803,57 @@ function CustomerMonthlyReport() {
           </table>
         </div>
       </div>
+
+      {/* Bulk Delete Confirmation Modal */}
+      {showBulkDeleteModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-[100]">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">Bulk Delete Customers</h3>
+              <button
+                onClick={() => setShowBulkDeleteModal(false)}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="mb-6">
+              <div className="p-4 bg-red-50 border border-red-200 rounded-md mb-4">
+                <p className="text-sm text-red-800">
+                  <strong>Warning:</strong> This action cannot be undone. All sales records for the selected customers will be permanently deleted.
+                </p>
+              </div>
+              <div className="space-y-2">
+                <p className="text-sm text-gray-700">
+                  <strong>Selected Customers:</strong> {selectedCustomers.size}
+                </p>
+                <p className="text-sm text-gray-700">
+                  <strong>Total Sales Records:</strong> {filteredCustomers.filter(c => selectedCustomers.has(c.phone)).reduce((sum, c) => sum + (c.sales?.length || 0), 0)}
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end space-x-3">
+              <button
+                onClick={() => setShowBulkDeleteModal(false)}
+                className="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-gray-700 hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleBulkDelete}
+                disabled={bulkDeleteLoading}
+                className={`px-4 py-2 rounded-md shadow-sm ${
+                  bulkDeleteLoading 
+                    ? 'bg-gray-400 cursor-not-allowed' 
+                    : 'bg-red-600 hover:bg-red-700 text-white'
+                }`}
+              >
+                {bulkDeleteLoading ? 'Deleting...' : 'Delete Selected Customers'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Customer Monthly Details Modal */}
       {showDetails && selectedCustomer && (

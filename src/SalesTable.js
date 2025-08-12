@@ -153,21 +153,41 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
       );
       const allReceiptsSnapshot = await getDocs(allReceiptsQuery);
       let previousRemaining = 0;
+      let totalRemainingFromAllMonths = 0;
+      
       allReceiptsSnapshot.docs.forEach(doc => {
         const data = doc.data();
         if (data.billNumber !== sale.billNumber) {
           previousRemaining += Number(data.remainingAmount || 0);
         }
+        // Calculate total remaining from all months
+        totalRemainingFromAllMonths += Number(data.remainingAmount || 0);
       });
-
+      
+      // Add current sale's remaining amount to total
+      totalRemainingFromAllMonths += Number(sale.remainingAmount || 0);
+      
+      // Use total remaining from all months if checkbox is checked, otherwise use current sale's remaining
+      const remainingAmountToShow = showRemainingBalance ? totalRemainingFromAllMonths : (sale.remainingAmount || 0);
+      
+      console.log('SalesTable handlePrint Debug:', {
+        customerName: sale.customerName,
+        customerPhone: sale.customerPhone,
+        currentSaleRemaining: sale.remainingAmount || 0,
+        totalRemainingFromAllMonths,
+        remainingAmountToShow,
+        showRemainingBalance,
+        checkboxState: showRemainingBalance
+      });
       
       const html = generatePrintableHTML({
         customerName: sale.customerName,
         customerPhone: sale.customerPhone,
+        customerId: sale.customerId,
         items: sale.items,
         totalAmount: sale.totalAmount,
         paidAmount: sale.paidAmount || 0,
-        remainingAmount: sale.remainingAmount || 0,
+        remainingAmount: remainingAmountToShow,
         date: sale.date,
         paymentMethod: sale.paymentMethod,
         chequeNumber: sale.chequeNumber,
@@ -301,8 +321,8 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
         paymentInfo = sale.comment;
       }
 
-      // Format customer name with phone number
-      const customerInfo = `${sale.customerName}\n${sale.customerPhone || '-'}`;
+      // Format customer name with customer ID
+      const customerInfo = `${sale.customerName}\nID: ${sale.customerId || sale.customerPhone || '-'}`;
 
       return [
         sale.billNumber || '-',
@@ -359,6 +379,7 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
       await updateDoc(saleDoc, {
         customerName: updatedSale.customerName,
         customerPhone: updatedSale.customerPhone,
+        customerId: updatedSale.customerId || updatedSale.customerPhone,
         items: updatedSale.items,
         totalAmount: updatedSale.totalAmount,
         paidAmount: updatedSale.paidAmount,
@@ -463,6 +484,18 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
             <option value="debt">Only Debt</option>
           </select>
         </div>
+        <div className="flex items-center">
+          <input
+            type="checkbox"
+            id="showRemainingBalance"
+            checked={showRemainingBalance}
+            onChange={e => setShowRemainingBalance(e.target.checked)}
+            className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+          />
+          <label htmlFor="showRemainingBalance" className="ml-2 block text-sm text-gray-700">
+            Show Total Remaining Amount (All Months) in Reports
+          </label>
+        </div>
       </div>
 
       <div className="bg-white rounded-lg shadow overflow-hidden">
@@ -504,7 +537,12 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
                   {formatDate(sale.date)}
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-center">
-                  {sale.customerName}
+                  <div>
+                    <div className="font-medium">{sale.customerName}</div>
+                    <div className="text-xs text-gray-500">
+                      ID: {sale.customerId || sale.customerPhone || '-'}
+                    </div>
+                  </div>
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-center">
                   {sale.paymentMethod}
@@ -570,7 +608,7 @@ function SalesTable({ onAddNewSale, refreshTrigger }) {
               <div>
                 <h3 className="text-xl font-semibold text-gray-900">Sale Details</h3>
                 <p className="text-sm text-gray-500 mt-1">Customer: {selectedSale?.customerName}</p>
-                <p className="text-sm text-gray-500">Phone: {selectedSale?.customerPhone || '-'}</p>
+                <p className="text-sm text-gray-500">Customer ID: {selectedSale?.customerId || selectedSale?.customerPhone || '-'}</p>
                 <p className="text-sm text-gray-500">Date: {formatDate(selectedSale?.date)}</p>
               </div>
               <div className="flex items-center space-x-4">
